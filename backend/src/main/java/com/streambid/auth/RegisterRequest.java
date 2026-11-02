@@ -11,4 +11,9 @@ public record RegisterRequest(
         @NotBlank @Size(min = 10, max = 72) String password,
         @NotBlank @Size(max = 80) String displayName,
         @NotNull UserRole role) {
+
+    @Override
+    public String toString() {
+        return "RegisterRequest[redacted]";
+    }
 }

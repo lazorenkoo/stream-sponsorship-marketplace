@@ -61,6 +61,27 @@ class UserRepositoryTest {
     MockMvc mvc;
 
     @Test
+    void validationDoesNotExposePassword() throws Exception {
+        String body = """
+                {"email":"valid@example.com","password":"secret",
+                "displayName":"Valid","role":"STREAMER"}
+                """;
+        var result = mvc.perform(post("/api/auth/register").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fields[0]").value("password"))
+                .andExpect(jsonPath("$.detail").value("Invalid request data")).andReturn();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("secret");
+    }
+
+    @Test
+    void malformedJsonReturnsSafeError() throws Exception {
+        mvc.perform(post("/api/auth/register").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid JSON request"));
+    }
+    @Test
     void logsInReadsProfileAndLogsOut() throws Exception {
         registration.register(new RegisterRequest(
                 "login@example.com", "strong-password", "Login", UserRole.STREAMER));
