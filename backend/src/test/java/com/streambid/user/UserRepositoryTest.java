@@ -1,6 +1,7 @@
 package com.streambid.user;
 
 import java.util.UUID;
+import com.streambid.security.AccountDetailsService;
 import com.streambid.auth.RegisterRequest;
 import com.streambid.auth.RegistrationService;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -43,6 +44,21 @@ class UserRepositoryTest {
     @Autowired
     PasswordEncoder passwords;
 
+    @Autowired
+    AccountDetailsService accounts;
+
+    @Test
+    void loadsAccountWithBothRoles() {
+        var profile = registration.register(new RegisterRequest(
+                "roles@example.com", "strong-password", "Roles", UserRole.STREAMER));
+        users.addRole(profile.id(), UserRole.ADVERTISER);
+
+        var account = accounts.loadUserByUsername("ROLES@EXAMPLE.COM");
+        assertThat(account.getUsername()).isEqualTo("roles@example.com");
+        assertThat(account.getAuthorities()).extracting("authority")
+                .containsExactlyInAnyOrder("ROLE_STREAMER", "ROLE_ADVERTISER");
+        assertThat(passwords.matches("strong-password", account.getPassword())).isTrue();
+    }
     @Test
     void registersWithNormalizedEmailAndHashedPassword() {
         var profile = registration.register(new RegisterRequest(

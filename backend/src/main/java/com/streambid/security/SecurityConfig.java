@@ -20,6 +20,13 @@ public class SecurityConfig {
         http.exceptionHandling(errors -> errors
                 .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
         http.requestCache(cache -> cache.disable());
+        http.formLogin(login -> login.loginProcessingUrl("/api/auth/login")
+                .usernameParameter("email")
+                .successHandler((request, response, auth) -> response.setStatus(204))
+                .failureHandler((request, response, error) -> response.setStatus(401))
+                .permitAll());
+        http.logout(logout -> logout.logoutUrl("/api/auth/logout")
+                .logoutSuccessHandler((request, response, auth) -> response.setStatus(204)));
         return http.build();
     }
 

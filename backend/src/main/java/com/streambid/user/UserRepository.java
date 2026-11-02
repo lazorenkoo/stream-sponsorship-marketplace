@@ -1,6 +1,7 @@
 package com.streambid.user;
 
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.Field;
@@ -29,6 +30,12 @@ public class UserRepository {
                         record.get(PASSWORD), record.get(NAME)));
     }
 
+    public List<String> findRoles(UUID userId) {
+        return database.select(DSL.field(DSL.name("role"), String.class))
+                .from(DSL.table(DSL.name("user_roles")))
+                .where(DSL.field(DSL.name("user_id"), UUID.class).eq(userId))
+                .fetch(0, String.class);
+    }
     public void addRole(UUID userId, UserRole role) {
         database.insertInto(DSL.table(DSL.name("user_roles")))
                 .columns(DSL.field(DSL.name("user_id"), UUID.class),
