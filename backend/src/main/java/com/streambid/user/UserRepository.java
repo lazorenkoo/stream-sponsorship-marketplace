@@ -29,6 +29,13 @@ public class UserRepository {
                         record.get(PASSWORD), record.get(NAME)));
     }
 
+    public void addRole(UUID userId, UserRole role) {
+        database.insertInto(DSL.table(DSL.name("user_roles")))
+                .columns(DSL.field(DSL.name("user_id"), UUID.class),
+                        DSL.field(DSL.name("role"), String.class))
+                .values(userId, role.name())
+                .execute();
+    }
     public void save(UserAccount user) {
         database.insertInto(DSL.table(DSL.name("users")))
                 .columns(ID, EMAIL, PASSWORD, NAME)

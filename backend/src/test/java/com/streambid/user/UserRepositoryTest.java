@@ -1,6 +1,10 @@
 package com.streambid.user;
 
 import java.util.UUID;
+import com.streambid.auth.RegisterRequest;
+import com.streambid.auth.RegistrationService;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.server.ResponseStatusException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,6 +37,39 @@ class UserRepositoryTest {
     @Autowired
     UserRepository users;
 
+    @Autowired
+    RegistrationService registration;
+
+    @Autowired
+    PasswordEncoder passwords;
+
+    @Test
+    void registersWithNormalizedEmailAndHashedPassword() {
+        var profile = registration.register(new RegisterRequest(
+                "New@Example.com", "strong-password", " New User ", UserRole.STREAMER));
+        UserAccount saved = users.findByEmail("new@example.com").orElseThrow();
+        assertThat(saved.id()).isEqualTo(profile.id());
+        assertThat(saved.displayName()).isEqualTo("New User");
+        assertThat(saved.passwordHash()).isNotEqualTo("strong-password");
+        assertThat(passwords.matches("strong-password", saved.passwordHash())).isTrue();
+    }
+
+    @Test
+    void preventsAdminRegistration() {
+        assertThatThrownBy(() -> registration.register(new RegisterRequest(
+                "admin@example.com", "strong-password", "Admin", UserRole.ADMIN)))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("400");
+        assertThat(users.findByEmail("admin@example.com")).isEmpty();
+    }
+
+    @Test
+    void rejectsPasswordsExceedingBcryptByteLimit() {
+        assertThatThrownBy(() -> registration.register(new RegisterRequest(
+                "long@example.com", "я".repeat(40), "Long", UserRole.ADVERTISER)))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("400");
+    }
     @Test
     void savesAndFindsUser() {
         UserAccount user = new UserAccount(UUID.randomUUID(), "user@example.com", "hash", "User");
