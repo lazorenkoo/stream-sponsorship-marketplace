@@ -1,6 +1,7 @@
 package com.streambid.user;
 
 import java.util.UUID;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.mock.web.MockHttpSession;
@@ -60,6 +61,30 @@ class UserRepositoryTest {
     @Autowired
     MockMvc mvc;
 
+    @Autowired
+    ObjectMapper json;
+
+    @Test
+    void rotatesSessionAndCsrfTokenAfterLogin() throws Exception {
+        registration.register(new RegisterRequest(
+                "csrf@example.com", "strong-password", "CSRF", UserRole.STREAMER));
+        var before = mvc.perform(get("/api/auth/csrf")).andExpect(status().isOk()).andReturn();
+        var session = (MockHttpSession) before.getRequest().getSession(false);
+        String oldSessionId = session.getId();
+        String oldToken = json.readTree(before.getResponse().getContentAsString()).get("token").asText();
+        mvc.perform(post("/api/auth/login").session(session).header("X-CSRF-TOKEN", oldToken)
+                .param("email", "csrf@example.com").param("password", "strong-password"))
+                .andExpect(status().isNoContent());
+        assertThat(session.getId()).isNotEqualTo(oldSessionId);
+        mvc.perform(post("/api/auth/logout").session(session).header("X-CSRF-TOKEN", oldToken))
+                .andExpect(status().isForbidden());
+        var after = mvc.perform(get("/api/auth/csrf").session(session))
+                .andExpect(status().isOk()).andReturn();
+        String newToken = json.readTree(after.getResponse().getContentAsString()).get("token").asText();
+        mvc.perform(post("/api/auth/logout").session(session).header("X-CSRF-TOKEN", newToken))
+                .andExpect(status().isNoContent());
+        assertThat(session.isInvalid()).isTrue();
+    }
     @Test
     void validationDoesNotExposePassword() throws Exception {
         String body = """
