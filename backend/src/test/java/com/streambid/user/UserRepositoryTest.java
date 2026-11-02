@@ -1,6 +1,15 @@
 package com.streambid.user;
 
 import java.util.UUID;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.http.MediaType;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import com.streambid.security.AccountDetailsService;
 import com.streambid.auth.RegisterRequest;
 import com.streambid.auth.RegistrationService;
@@ -21,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
+@AutoConfigureMockMvc
 @Testcontainers
 @Transactional
 class UserRepositoryTest {
@@ -47,6 +57,59 @@ class UserRepositoryTest {
     @Autowired
     AccountDetailsService accounts;
 
+    @Autowired
+    MockMvc mvc;
+
+    @Test
+    void logsInReadsProfileAndLogsOut() throws Exception {
+        registration.register(new RegisterRequest(
+                "login@example.com", "strong-password", "Login", UserRole.STREAMER));
+        var result = mvc.perform(post("/api/auth/login").with(csrf())
+                .param("email", "LOGIN@EXAMPLE.COM").param("password", "strong-password"))
+                .andExpect(status().isNoContent()).andReturn();
+        var session = (MockHttpSession) result.getRequest().getSession(false);
+        assertThat(session).isNotNull();
+        mvc.perform(get("/api/users/me").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("login@example.com"))
+                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+        mvc.perform(post("/api/auth/logout").session(session).with(csrf()))
+                .andExpect(status().isNoContent());
+        assertThat(session.isInvalid()).isTrue();
+        mvc.perform(get("/api/users/me")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void rejectsWrongLoginAndMissingCsrf() throws Exception {
+        mvc.perform(post("/api/auth/login").with(csrf())
+                .param("email", "missing@example.com").param("password", "wrong-password"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/login").param("email", "missing@example.com"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void registersThroughApiAndRejectsDuplicate() throws Exception {
+        String body = """
+                {"email":"api@example.com","password":"strong-password",
+                "displayName":"API User","role":"ADVERTISER"}
+                """;
+        mvc.perform(post("/api/auth/register").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.displayName").value("API User"))
+                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+        mvc.perform(post("/api/auth/register").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void rejectsInvalidRegistrationData() throws Exception {
+        mvc.perform(post("/api/auth/register").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+    }
     @Test
     void loadsAccountWithBothRoles() {
         var profile = registration.register(new RegisterRequest(
