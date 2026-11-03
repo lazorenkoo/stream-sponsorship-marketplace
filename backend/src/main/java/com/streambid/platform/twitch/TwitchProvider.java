@@ -12,6 +12,7 @@ import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 
 @Service
@@ -72,21 +73,32 @@ public class TwitchProvider implements StreamingPlatformProvider {
         if (channelId == null || !channelId.matches("[1-9][0-9]{0,19}")) {
             throw new IllegalArgumentException("Invalid Twitch channel ID");
         }
-        JsonNode body;
-        try {
-            body = client.get().uri(uri -> uri.path(path).queryParam(parameter, channelId).build())
-                    .header("Client-Id", properties.clientId())
-                    .headers(headers -> headers.setBearerAuth(tokens.accessToken()))
-                    .retrieve().body(JsonNode.class);
-        } catch (RestClientException exception) {
-            throw unavailable();
-        }
+        JsonNode body = request(path, parameter, channelId);
         if (body == null || !body.path("data").isArray() || body.get("data").size() > 1) {
             throw unavailable();
         }
         return body.get("data");
     }
 
+    private JsonNode request(String path, String parameter, String channelId) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            String token = tokens.accessToken();
+            try {
+                return client.get().uri(uri -> uri.path(path).queryParam(parameter, channelId).build())
+                        .header("Client-Id", properties.clientId())
+                        .headers(headers -> headers.setBearerAuth(token))
+                        .retrieve().body(JsonNode.class);
+            } catch (HttpClientErrorException.Unauthorized exception) {
+                if (attempt == 1) {
+                    throw unavailable();
+                }
+                tokens.invalidate(token);
+            } catch (RestClientException exception) {
+                throw unavailable();
+            }
+        }
+        throw unavailable();
+    }
     private PlatformUnavailableException unavailable() {
         return new PlatformUnavailableException(platform(), new IllegalStateException("Helix request failed"));
     }

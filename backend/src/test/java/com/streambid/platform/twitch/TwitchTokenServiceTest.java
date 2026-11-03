@@ -31,6 +31,22 @@ class TwitchTokenServiceTest {
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-03T08:00:00Z"), ZoneOffset.UTC);
 
     @Test
+    void staleRejectionDoesNotInvalidateNewerToken() {
+        server.expect(requestTo(properties.tokenUrl())).andRespond(withSuccess("""
+                {"access_token":"first-token","expires_in":3600,"token_type":"bearer"}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(properties.tokenUrl())).andRespond(withSuccess("""
+                {"access_token":"next-token","expires_in":3600,"token_type":"bearer"}
+                """, MediaType.APPLICATION_JSON));
+        var tokens = new TwitchTokenService(builder.build(), properties, clock);
+        assertThat(tokens.accessToken()).isEqualTo("first-token");
+        tokens.invalidate("first-token");
+        assertThat(tokens.accessToken()).isEqualTo("next-token");
+        tokens.invalidate("first-token");
+        assertThat(tokens.accessToken()).isEqualTo("next-token");
+        server.verify();
+    }
+    @Test
     void refreshesBeforeTokenExpiry() {
         Clock movingClock = mock(Clock.class);
         Instant start = clock.instant();

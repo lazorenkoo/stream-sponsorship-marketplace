@@ -58,6 +58,11 @@ public class TwitchTokenService {
         return cachedToken;
     }
 
+    public synchronized void invalidate(String rejectedToken) {
+        if (cachedToken != null && cachedToken.equals(rejectedToken)) {
+            cachedToken = null;
+        }
+    }
     private PlatformUnavailableException unavailable() {
         return new PlatformUnavailableException(StreamingPlatform.TWITCH,
                 new IllegalStateException("Token request failed"));

@@ -18,6 +18,7 @@ import org.springframework.web.client.RestClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -30,6 +31,35 @@ class TwitchProviderTest {
     private final TwitchTokenService tokens = mock(TwitchTokenService.class);
     private final TwitchProperties properties = new TwitchProperties("test-client", "secret", "", "");
 
+    @Test
+    void refreshesRejectedTokenAndRetriesOnce() {
+        when(tokens.accessToken()).thenReturn("old-token", "new-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andExpect(header("Authorization", "Bearer old-token"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andExpect(header("Authorization", "Bearer new-token"))
+                .andRespond(withSuccess("""
+                        {"data":[{"user_id":"123","type":"live","viewer_count":42}]}
+                        """, MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThat(provider.getStreamStatus("123").viewers()).isEqualTo(42L);
+        verify(tokens).invalidate("old-token");
+        server.verify();
+    }
+
+    @Test
+    void repeatedUnauthorizedResponseStopsAfterTwoRequests() {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThatThrownBy(() -> provider.getStreamStatus("123")).isInstanceOf(PlatformUnavailableException.class);
+        verify(tokens).invalidate("test-token");
+        server.verify();
+    }
     @Test
     void confirmsChannelExistsBeforeReportingOffline() {
         when(tokens.accessToken()).thenReturn("test-token");
@@ -59,7 +89,7 @@ class TwitchProviderTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {401, 429, 503})
+    @ValueSource(ints = {429, 503})
     void upstreamFailureIsNotReportedOffline(int statusCode) {
         when(tokens.accessToken()).thenReturn("test-token");
         server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
