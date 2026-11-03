@@ -2,6 +2,8 @@ package com.streambid.platform.twitch;
 
 import com.streambid.platform.StreamState;
 import java.time.Clock;
+import java.time.Instant;
+import com.streambid.platform.PlatformRateLimitException;
 import com.streambid.platform.ChannelNotFoundException;
 import com.streambid.platform.PlatformUnavailableException;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -31,6 +33,28 @@ class TwitchProviderTest {
     private final TwitchTokenService tokens = mock(TwitchTokenService.class);
     private final TwitchProperties properties = new TwitchProperties("test-client", "secret", "", "");
 
+    @Test
+    void waitsUntilRateLimitResetWithoutSendingExtraRequests() {
+        Clock movingClock = mock(Clock.class);
+        Instant start = Instant.parse("2026-11-03T10:00:00Z");
+        when(movingClock.instant()).thenReturn(start);
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                        .header("Ratelimit-Reset", Long.toString(start.plusSeconds(120).getEpochSecond())));
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withSuccess("""
+                        {"data":[{"user_id":"123","type":"live","viewer_count":42}]}
+                        """, MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, movingClock);
+        assertThatThrownBy(() -> provider.getStreamStatus("123"))
+                .isInstanceOf(PlatformRateLimitException.class);
+        assertThatThrownBy(() -> provider.getStreamStatus("123"))
+                .isInstanceOf(PlatformRateLimitException.class);
+        when(movingClock.instant()).thenReturn(start.plusSeconds(120));
+        assertThat(provider.getStreamStatus("123").viewers()).isEqualTo(42L);
+        server.verify();
+    }
     @Test
     void refreshesRejectedTokenAndRetriesOnce() {
         when(tokens.accessToken()).thenReturn("old-token", "new-token");

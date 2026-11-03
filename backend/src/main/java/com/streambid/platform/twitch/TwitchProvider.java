@@ -9,6 +9,9 @@ import com.streambid.platform.StreamStatus;
 import com.streambid.platform.StreamingPlatform;
 import com.streambid.platform.StreamingPlatformProvider;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.DateTimeException;
+import com.streambid.platform.PlatformRateLimitException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -23,6 +26,7 @@ public class TwitchProvider implements StreamingPlatformProvider {
     private final TwitchTokenService tokens;
     private final TwitchProperties properties;
     private final Clock clock;
+    private volatile Instant retryAt = Instant.MIN;
 
     public TwitchProvider(RestClient twitchRestClient, TwitchTokenService tokens,
                           TwitchProperties properties, Clock twitchClock) {
@@ -82,12 +86,18 @@ public class TwitchProvider implements StreamingPlatformProvider {
 
     private JsonNode request(String path, String parameter, String channelId) {
         for (int attempt = 0; attempt < 2; attempt++) {
+            if (clock.instant().isBefore(retryAt)) {
+                throw new PlatformRateLimitException(platform(), retryAt);
+            }
             String token = tokens.accessToken();
             try {
                 return client.get().uri(uri -> uri.path(path).queryParam(parameter, channelId).build())
                         .header("Client-Id", properties.clientId())
                         .headers(headers -> headers.setBearerAuth(token))
                         .retrieve().body(JsonNode.class);
+            } catch (HttpClientErrorException.TooManyRequests exception) {
+                recordRateLimit(exception);
+                throw new PlatformRateLimitException(platform(), retryAt);
             } catch (HttpClientErrorException.Unauthorized exception) {
                 if (attempt == 1) {
                     throw unavailable();
@@ -98,6 +108,24 @@ public class TwitchProvider implements StreamingPlatformProvider {
             }
         }
         throw unavailable();
+    }
+    private synchronized void recordRateLimit(HttpClientErrorException exception) {
+        Instant reset = clock.instant().plusSeconds(60);
+        var headers = exception.getResponseHeaders();
+        String value = headers == null ? null : headers.getFirst("Ratelimit-Reset");
+        if (value != null) {
+            try {
+                reset = Instant.ofEpochSecond(Long.parseLong(value));
+            } catch (NumberFormatException | DateTimeException ignored) {
+                reset = clock.instant().plusSeconds(60);
+            }
+        }
+        if (!reset.isAfter(clock.instant())) {
+            reset = clock.instant().plusSeconds(1);
+        }
+        if (reset.isAfter(retryAt)) {
+            retryAt = reset;
+        }
     }
     private PlatformUnavailableException unavailable() {
         return new PlatformUnavailableException(platform(), new IllegalStateException("Helix request failed"));
