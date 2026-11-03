@@ -12,7 +12,7 @@ import org.springframework.web.client.RestClient;
 
 @Configuration
 @ConditionalOnProperty(name = "twitch.enabled", havingValue = "true")
-@EnableConfigurationProperties(TwitchProperties.class)
+@EnableConfigurationProperties({TwitchProperties.class, TwitchOAuthProperties.class})
 public class TwitchClientConfiguration {
 
     @Bean

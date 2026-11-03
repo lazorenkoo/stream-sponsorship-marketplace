@@ -12,7 +12,7 @@ class TwitchConfigurationTest {
         new ApplicationContextRunner()
                 .withUserConfiguration(TwitchClientConfiguration.class, TwitchTokenService.class, TwitchProvider.class)
                 .withPropertyValues("twitch.enabled=true", "twitch.client-id=test", "twitch.client-secret=test",
-                        "twitch.api-url=https://example.test/helix", "twitch.token-url=https://example.test/token")
+                        "twitch.oauth.redirect-uri=http://localhost:8080/callback", "twitch.api-url=https://example.test/helix", "twitch.token-url=https://example.test/token")
                 .run(context -> assertThat(context).hasNotFailed().hasSingleBean(TwitchProvider.class)
                         .hasSingleBean(TwitchTokenService.class));
     }
