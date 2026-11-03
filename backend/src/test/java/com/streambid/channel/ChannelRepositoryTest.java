@@ -6,6 +6,12 @@ import com.streambid.user.UserRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
+@AutoConfigureMockMvc
 @Testcontainers
 @Transactional
 class ChannelRepositoryTest {
@@ -41,6 +48,32 @@ class ChannelRepositoryTest {
     @Autowired
     UserRepository users;
 
+    @Autowired
+    MockMvc mvc;
+
+    @Test
+    void channelApiUsesAuthenticatedOwnerInsteadOfQueryParameter() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "mine@example.com", "hash", "Mine"));
+        users.save(new UserAccount(other, "theirs@example.com", "hash", "Theirs"));
+        var time = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+        channels.saveVerified(new ConnectedChannel(UUID.randomUUID(), owner, StreamingPlatform.TWITCH,
+                "mine", "My channel", time));
+        channels.saveVerified(new ConnectedChannel(UUID.randomUUID(), other, StreamingPlatform.TWITCH,
+                "theirs", "Other channel", time));
+        mvc.perform(get("/api/channels").param("userId", other.toString()).with(user("mine@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].externalChannelId").value("mine"));
+        mvc.perform(get("/api/channels").with(user("theirs@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].externalChannelId").value("theirs"));
+    }
+
+    @Test
+    void channelApiRejectsAnonymousRequests() throws Exception {
+        mvc.perform(get("/api/channels")).andExpect(status().isUnauthorized());
+    }
     @Test
     void readsOnlyOwnersChannelsAndRejectsDuplicateOwnership() {
         UUID owner = UUID.randomUUID();
