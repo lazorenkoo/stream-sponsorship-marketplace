@@ -7,6 +7,11 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.Base64;
+import com.streambid.platform.PlatformUnavailableException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import com.streambid.platform.twitch.TwitchCredentialRefresh;
 import com.streambid.platform.twitch.TwitchCodeExchange;
 import com.streambid.platform.twitch.TwitchReauthorizationRequiredException;
@@ -112,6 +117,59 @@ class ChannelRepositoryTest {
                 new TwitchUserTokens("old-access", "old-refresh", java.time.Instant.now().plusSeconds(3600)));
     }
 
+    @Test
+    void temporaryRefreshFailurePreservesStoredCredentials() {
+        var channel = channelForRefresh("temporary@example.com");
+        var before = credentials.find(channel.id()).orElseThrow();
+        when(exchange.refresh("old-refresh")).thenThrow(new PlatformUnavailableException(
+                StreamingPlatform.TWITCH, new IllegalStateException("Temporary failure")));
+        assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "old-access"))
+                .isInstanceOf(PlatformUnavailableException.class);
+        assertThat(credentials.find(channel.id())).contains(before);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void concurrentRejectedRequestsPerformOnlyOneRefresh() throws Exception {
+        var channel = channelForRefresh("concurrent@example.com");
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var secondStarted = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        var rotated = new TwitchUserTokens("concurrent-access", "concurrent-refresh",
+                java.time.Instant.now().plusSeconds(3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(exchange.refresh("old-refresh")).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() > 1) {
+                throw new AssertionError("Concurrent refresh was not serialized");
+            }
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Refresh test timed out");
+            }
+            return rotated;
+        });
+        try {
+            var first = executor.submit(() -> refreshService.refreshRejected(channel.id(), "old-access"));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            var second = executor.submit(() -> {
+                secondStarted.countDown();
+                return refreshService.refreshRejected(channel.id(), "old-access");
+            });
+            assertThat(secondStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> second.get(250, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            release.countDown();
+            assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(rotated);
+            assertThat(second.get(5, TimeUnit.SECONDS)).isEqualTo(rotated);
+            verify(exchange, times(1)).refresh("old-refresh");
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
+        }
+    }
     @Test
     void storesRotationOnceAndIgnoresStaleRejectedToken() {
         var channel = channelForRefresh("rotation@example.com");
