@@ -7,6 +7,17 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.Base64;
+import com.streambid.platform.ChannelInfo;
+import com.streambid.platform.twitch.TwitchConnectionStore;
+import com.streambid.platform.twitch.TwitchUserTokens;
+import java.time.Clock;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.web.server.ResponseStatusException;
+import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import com.streambid.security.TokenCipher;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
@@ -29,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
+@Import(ChannelRepositoryTest.StoreConfiguration.class)
 @AutoConfigureMockMvc
 @Testcontainers
 @Transactional
@@ -56,6 +68,54 @@ class ChannelRepositoryTest {
     @Autowired
     ChannelCredentialsRepository credentials;
 
+    @TestConfiguration
+    static class StoreConfiguration {
+        @Bean
+        TwitchConnectionStore store(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users) {
+            return new TwitchConnectionStore(channels, credentials, users,
+                    new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), Clock.systemUTC());
+        }
+    }
+
+    @Autowired
+    TwitchConnectionStore store;
+
+    @Autowired
+    DSLContext database;
+
+    @Test
+    void reconnectKeepsChannelIdAndDoesNotTransferOwnership() {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "connect@example.com", "hash", "Connect"));
+        users.save(new UserAccount(other, "blocked@example.com", "hash", "Blocked"));
+        var identity = new ChannelInfo("verified", "Streamer", null);
+        var tokens = new TwitchUserTokens("access", "refresh", java.time.Instant.now().plusSeconds(3600));
+        var first = store.save(owner, identity, tokens);
+        var second = store.save(owner, identity, tokens);
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(channels.findByUser(owner)).hasSize(1);
+        assertThat(users.findRoles(owner)).contains("STREAMER");
+        assertThatThrownBy(() -> store.save(other, identity, tokens)).isInstanceOf(ResponseStatusException.class);
+        assertThat(channels.findByUser(other)).isEmpty();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void encryptionFailureRollsBackNewChannel() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "rollback@example.com", "hash", "Rollback"));
+        try {
+            var tokens = new TwitchUserTokens("access", "", java.time.Instant.now().plusSeconds(3600));
+            assertThatThrownBy(() -> store.save(owner, new ChannelInfo("rollback-channel", "Rollback", null), tokens))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(channels.findByUser(owner)).isEmpty();
+            assertThat(users.findRoles(owner)).isEmpty();
+        } finally {
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(owner)).execute();
+        }
+    }
     @Test
     void storesOnlyEncryptedCredentialsBoundToChannel() {
         UUID owner = UUID.randomUUID();

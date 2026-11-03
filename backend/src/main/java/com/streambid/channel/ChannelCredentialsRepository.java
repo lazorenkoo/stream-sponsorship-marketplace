@@ -26,7 +26,10 @@ public class ChannelCredentialsRepository {
         database.insertInto(DSL.table(DSL.name("channel_credentials")))
                 .columns(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
                 .values(credentials.channelId(), credentials.accessTokenCiphertext(), credentials.refreshTokenCiphertext(),
-                        credentials.expiresAt(), credentials.lastValidatedAt()).execute();
+                        credentials.expiresAt(), credentials.lastValidatedAt())
+                .onConflict(CHANNEL_ID).doUpdate()
+                .set(ACCESS, credentials.accessTokenCiphertext()).set(REFRESH, credentials.refreshTokenCiphertext())
+                .set(EXPIRES, credentials.expiresAt()).set(VALIDATED, credentials.lastValidatedAt()).execute();
     }
 
     public Optional<ChannelCredentials> find(UUID channelId) {

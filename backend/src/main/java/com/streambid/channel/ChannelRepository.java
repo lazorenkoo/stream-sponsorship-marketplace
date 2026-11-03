@@ -2,6 +2,7 @@ package com.streambid.channel;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.Field;
@@ -23,6 +24,17 @@ public class ChannelRepository {
         this.database = database;
     }
 
+    public Optional<ConnectedChannel> connectVerified(ConnectedChannel channel) {
+        return database.insertInto(DSL.table(DSL.name("connected_channels")))
+                .columns(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
+                .values(channel.id(), channel.userId(), channel.platform().name(),
+                        channel.externalChannelId(), channel.displayName(), channel.verifiedAt())
+                .onConflict(PLATFORM, EXTERNAL_ID).doUpdate()
+                .set(NAME, channel.displayName()).set(VERIFIED_AT, channel.verifiedAt())
+                .where(DSL.field(DSL.name("connected_channels", "user_id"), UUID.class).eq(channel.userId()))
+                .returning(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
+                .fetchOptionalInto(ConnectedChannel.class);
+    }
     public void saveVerified(ConnectedChannel channel) {
         database.insertInto(DSL.table(DSL.name("connected_channels")))
                 .columns(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
