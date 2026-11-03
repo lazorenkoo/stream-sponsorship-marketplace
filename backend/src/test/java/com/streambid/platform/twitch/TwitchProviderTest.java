@@ -2,6 +2,15 @@ package com.streambid.platform.twitch;
 
 import com.streambid.platform.StreamState;
 import java.time.Clock;
+import com.streambid.platform.ChannelNotFoundException;
+import com.streambid.platform.PlatformUnavailableException;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.springframework.http.HttpStatus;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -21,6 +30,70 @@ class TwitchProviderTest {
     private final TwitchTokenService tokens = mock(TwitchTokenService.class);
     private final TwitchProperties properties = new TwitchProperties("test-client", "secret", "", "");
 
+    @Test
+    void confirmsChannelExistsBeforeReportingOffline() {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/users?id=123"))
+                .andRespond(withSuccess("""
+                        {"data":[{"id":"123","display_name":"Streamer","profile_image_url":"https://example.test/avatar"}]}
+                        """, MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        var status = provider.getStreamStatus("123");
+        assertThat(status.state()).isEqualTo(StreamState.OFFLINE);
+        assertThat(status.viewers()).isNull();
+        server.verify();
+    }
+
+    @Test
+    void missingChannelIsNotReportedOffline() {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/users?id=123"))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThatThrownBy(() -> provider.getStreamStatus("123")).isInstanceOf(ChannelNotFoundException.class);
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 429, 503})
+    void upstreamFailureIsNotReportedOffline(int statusCode) {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withStatus(HttpStatus.valueOf(statusCode)));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThatThrownBy(() -> provider.getStreamStatus("123")).isInstanceOf(PlatformUnavailableException.class);
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{}", "{\"data\":{}}", "not-json",
+            "{\"data\":[{\"user_id\":\"999\",\"type\":\"live\",\"viewer_count\":42}]}",
+            "{\"data\":[{\"user_id\":\"123\",\"type\":\"live\",\"viewer_count\":-1}]}",
+            "{\"data\":[{\"user_id\":\"123\",\"type\":\"live\",\"viewer_count\":\"42\"}]}"
+    })
+    void rejectsMalformedStreamData(String body) {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThatThrownBy(() -> provider.getStreamStatus("123")).isInstanceOf(PlatformUnavailableException.class);
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", "0", "../users", "123&user_id=999"})
+    void invalidChannelIdMakesNoRequest(String channelId) {
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThatThrownBy(() -> provider.getStreamStatus(channelId)).isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(tokens);
+        server.verify();
+    }
     @Test
     void readsLiveViewersAndSendsAuthorizationHeaders() {
         when(tokens.accessToken()).thenReturn("test-token");
