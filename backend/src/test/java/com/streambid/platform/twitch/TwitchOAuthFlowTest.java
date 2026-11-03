@@ -8,6 +8,11 @@ import com.streambid.channel.ChannelCredentialsRepository;
 import com.streambid.security.TokenCipher;
 import com.streambid.user.UserRole;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -80,6 +85,61 @@ class TwitchOAuthFlowTest {
     @Autowired ChannelCredentialsRepository credentials;
     @Autowired TokenCipher cipher;
 
+    @Autowired TwitchOAuthState states;
+
+    @BeforeEach
+    void resetMockServer() {
+        server.reset();
+    }
+
+    @AfterEach
+    void verifyMockServer() {
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"wrong-state", "denied", "missing-code", "other-session"})
+    void rejectsInvalidCallbackWithoutNetworkOrSavedChannels(String failure) throws Exception {
+        var owner = registration.register(new RegisterRequest(
+                "invalid-flow@example.com", "strong-password", "Invalid Flow", UserRole.ADVERTISER));
+        var session = new MockHttpSession();
+        String state = states.begin(session, owner.id());
+        var callbackSession = failure.equals("other-session") ? new MockHttpSession() : session;
+        var request = get("/api/channels/connect/twitch/callback").session(callbackSession).with(user(owner.email()))
+                .param("state", failure.equals("wrong-state") ? "invalid-state" : state);
+        if (!failure.equals("missing-code")) {
+            request.param("code", "private-code");
+        }
+        if (failure.equals("denied")) {
+            request.param("error", "private-provider-error");
+        }
+        var result = mvc.perform(request).andExpect(status().isBadRequest())
+                .andExpect(header().string("Cache-Control", "no-store")).andReturn();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("private-code", "private-provider-error");
+        assertThat(channels.findByUser(owner.id())).isEmpty();
+    }
+
+    @Test
+    void mismatchedIdentityDoesNotPersistChannelOrCredentials() throws Exception {
+        var owner = registration.register(new RegisterRequest(
+                "mismatch@example.com", "strong-password", "Mismatch", UserRole.ADVERTISER));
+        var session = new MockHttpSession();
+        String state = states.begin(session, owner.id());
+        server.expect(requestTo("https://example.test/token")).andRespond(withSuccess("""
+                {"access_token":"private-access","refresh_token":"private-refresh","expires_in":3600,"token_type":"bearer"}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/validate")).andRespond(withSuccess("""
+                {"client_id":"test-client","user_id":"verified-user","expires_in":3500}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/users")).andRespond(withSuccess("""
+                {"data":[{"id":"different-user","display_name":"Wrong"}]}
+                """, MediaType.APPLICATION_JSON));
+        mvc.perform(get("/api/channels/connect/twitch/callback").session(session).with(user(owner.email()))
+                .param("state", state).param("code", "private-code")).andExpect(status().isBadRequest());
+        assertThat(channels.findByUser(owner.id())).isEmpty();
+        mvc.perform(get("/api/channels/connect/twitch/callback").session(session).with(user(owner.email()))
+                .param("state", state).param("code", "private-code")).andExpect(status().isBadRequest());
+    }
     @Test
     void connectsVerifiedChannelWithEncryptedTokensAndRejectsReplay() throws Exception {
         var owner = registration.register(new RegisterRequest(
