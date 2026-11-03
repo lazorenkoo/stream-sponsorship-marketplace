@@ -3,6 +3,7 @@ package com.streambid.platform.twitch;
 import com.streambid.platform.StreamState;
 import java.time.Clock;
 import java.time.Instant;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import com.streambid.platform.PlatformRateLimitException;
 import com.streambid.platform.ChannelNotFoundException;
 import com.streambid.platform.PlatformUnavailableException;
@@ -33,6 +34,59 @@ class TwitchProviderTest {
     private final TwitchTokenService tokens = mock(TwitchTokenService.class);
     private final TwitchProperties properties = new TwitchProperties("test-client", "secret", "", "");
 
+    @Test
+    void encodesOpaqueIdWithoutAddingQueryParameters() {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/users?id=opaque%26user_id%3D999%2Fnext"))
+                .andRespond(withSuccess("""
+                        {"data":[{"id":"opaque&user_id=999/next","display_name":"Opaque"}]}
+                        """, MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThat(provider.getChannel("opaque&user_id=999/next").channelId())
+                .isEqualTo("opaque&user_id=999/next");
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "opaque-id"})
+    void acceptsIdsWithoutNumericAssumptions(String channelId) {
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/users?id=" + channelId))
+                .andRespond(withSuccess("{\"data\":[{\"id\":\"" + channelId
+                        + "\",\"display_name\":\"Opaque\"}]}", MediaType.APPLICATION_JSON));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
+        assertThat(provider.getChannel(channelId).channelId()).isEqualTo(channelId);
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"invalid", "9223372036854775807"})
+    void malformedRateLimitResetUsesSafeFallback(String headerValue) {
+        Instant start = Instant.parse("2026-11-03T10:00:00Z");
+        Clock fixedClock = Clock.fixed(start, java.time.ZoneOffset.UTC);
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).header("Ratelimit-Reset", headerValue));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, fixedClock);
+        var error = catchThrowableOfType(PlatformRateLimitException.class,
+                () -> provider.getStreamStatus("123"));
+        assertThat(error.retryAt()).isEqualTo(start.plusSeconds(60));
+        server.verify();
+    }
+
+    @Test
+    void pastRateLimitResetStillAppliesShortCooldown() {
+        Instant start = Instant.parse("2026-11-03T10:00:00Z");
+        Clock fixedClock = Clock.fixed(start, java.time.ZoneOffset.UTC);
+        when(tokens.accessToken()).thenReturn("test-token");
+        server.expect(requestTo("https://example.test/helix/streams?user_id=123"))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).header("Ratelimit-Reset", "-1"));
+        var provider = new TwitchProvider(builder.build(), tokens, properties, fixedClock);
+        var error = catchThrowableOfType(PlatformRateLimitException.class,
+                () -> provider.getStreamStatus("123"));
+        assertThat(error.retryAt()).isEqualTo(start.plusSeconds(1));
+        server.verify();
+    }
     @Test
     void waitsUntilRateLimitResetWithoutSendingExtraRequests() {
         Clock movingClock = mock(Clock.class);
@@ -141,7 +195,7 @@ class TwitchProviderTest {
 
     @ParameterizedTest
     @NullSource
-    @ValueSource(strings = {"", "0", "../users", "123&user_id=999"})
+    @ValueSource(strings = {"", " ", "\t"})
     void invalidChannelIdMakesNoRequest(String channelId) {
         var provider = new TwitchProvider(builder.build(), tokens, properties, Clock.systemUTC());
         assertThatThrownBy(() -> provider.getStreamStatus(channelId)).isInstanceOf(IllegalArgumentException.class);

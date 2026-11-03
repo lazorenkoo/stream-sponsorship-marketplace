@@ -74,7 +74,8 @@ public class TwitchProvider implements StreamingPlatformProvider {
     }
 
     private JsonNode getData(String path, String parameter, String channelId) {
-        if (channelId == null || !channelId.matches("[1-9][0-9]{0,19}")) {
+        if (channelId == null || channelId.isBlank() || channelId.length() > 255
+                || channelId.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException("Invalid Twitch channel ID");
         }
         JsonNode body = request(path, parameter, channelId);
@@ -91,7 +92,7 @@ public class TwitchProvider implements StreamingPlatformProvider {
             }
             String token = tokens.accessToken();
             try {
-                return client.get().uri(uri -> uri.path(path).queryParam(parameter, channelId).build())
+                return client.get().uri(uri -> uri.path(path).queryParam(parameter, "{channelId}").build(channelId))
                         .header("Client-Id", properties.clientId())
                         .headers(headers -> headers.setBearerAuth(token))
                         .retrieve().body(JsonNode.class);
