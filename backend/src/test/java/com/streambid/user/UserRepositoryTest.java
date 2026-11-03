@@ -1,6 +1,7 @@
 package com.streambid.user;
 
 import java.util.UUID;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
@@ -64,6 +65,21 @@ class UserRepositoryTest {
     @Autowired
     ObjectMapper json;
 
+    @Test
+    void addsSecondPublicRoleButRejectsAdmin() throws Exception {
+        var profile = registration.register(new RegisterRequest(
+                "second@example.com", "strong-password", "Second", UserRole.STREAMER));
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(post("/api/users/me/roles").with(user("second@example.com")).with(csrf())
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"ADVERTISER\"}"))
+                    .andExpect(status().isNoContent());
+        }
+        assertThat(users.findRoles(profile.id())).containsExactlyInAnyOrder("STREAMER", "ADVERTISER");
+        mvc.perform(post("/api/users/me/roles").with(user("second@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"ADMIN\"}"))
+                .andExpect(status().isBadRequest());
+        assertThat(users.findRoles(profile.id())).doesNotContain("ADMIN");
+    }
     @Test
     void rotatesSessionAndCsrfTokenAfterLogin() throws Exception {
         registration.register(new RegisterRequest(

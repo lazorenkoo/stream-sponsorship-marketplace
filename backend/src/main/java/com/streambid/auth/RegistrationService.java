@@ -5,6 +5,7 @@ import com.streambid.user.UserRepository;
 import com.streambid.user.UserRole;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -41,6 +42,6 @@ public class RegistrationService {
         } catch (DuplicateKeyException exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already registered");
         }
-        return new UserProfile(user.id(), user.email(), user.displayName());
+        return new UserProfile(user.id(), user.email(), user.displayName(), List.of(request.role().name()));
     }
 }

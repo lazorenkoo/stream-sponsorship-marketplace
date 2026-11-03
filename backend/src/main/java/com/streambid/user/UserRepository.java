@@ -40,7 +40,7 @@ public class UserRepository {
         database.insertInto(DSL.table(DSL.name("user_roles")))
                 .columns(DSL.field(DSL.name("user_id"), UUID.class),
                         DSL.field(DSL.name("role"), String.class))
-                .values(userId, role.name())
+                .values(userId, role.name()).onConflictDoNothing()
                 .execute();
     }
     public void save(UserAccount user) {
