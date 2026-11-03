@@ -11,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.StringUtils;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -43,6 +44,22 @@ public class TwitchCodeExchange {
         form.add("grant_type", "authorization_code");
         form.add("code", code);
         form.add("redirect_uri", oauth.redirectUri().toString());
+        return requestTokens(form, false);
+    }
+
+    public TwitchUserTokens refresh(String refreshToken) {
+        if (!StringUtils.hasText(refreshToken) || refreshToken.length() > 16384) {
+            throw new TwitchReauthorizationRequiredException();
+        }
+        var form = new LinkedMultiValueMap<String, String>();
+        form.add("client_id", properties.clientId());
+        form.add("client_secret", properties.clientSecret());
+        form.add("grant_type", "refresh_token");
+        form.add("refresh_token", refreshToken);
+        return requestTokens(form, true);
+    }
+
+    private TwitchUserTokens requestTokens(MultiValueMap<String, String> form, boolean refreshing) {
         try {
             var response = client.post().uri(properties.tokenUrl())
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form)
@@ -54,8 +71,15 @@ public class TwitchCodeExchange {
             }
             return new TwitchUserTokens(response.accessToken(), response.refreshToken(),
                     clock.instant().plusSeconds(response.expiresIn()));
-        } catch (HttpClientErrorException.BadRequest exception) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Twitch authorization failed");
+        } catch (HttpClientErrorException exception) {
+            int status = exception.getStatusCode().value();
+            if (refreshing && (status == 400 || status == 401)) {
+                throw new TwitchReauthorizationRequiredException();
+            }
+            if (!refreshing && status == 400) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Twitch authorization failed");
+            }
+            throw unavailable();
         } catch (RestClientException | DateTimeException exception) {
             throw unavailable();
         }

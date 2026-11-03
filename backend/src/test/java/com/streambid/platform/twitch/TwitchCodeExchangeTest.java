@@ -5,6 +5,9 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import com.streambid.platform.PlatformUnavailableException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -26,6 +29,39 @@ class TwitchCodeExchangeTest {
     private final TwitchOAuthProperties oauth = new TwitchOAuthProperties(URI.create("http://localhost:8080/callback"));
     private final Instant now = Instant.parse("2026-11-03T14:00:00Z");
 
+    @Test
+    void refreshesWithEncodedTokenAndReturnsRotatedCredentials() {
+        server.expect(requestTo(properties.tokenUrl())).andExpect(method(HttpMethod.POST))
+                .andExpect(content().string(containsString("grant_type=refresh_token")))
+                .andExpect(content().string(containsString("refresh_token=refresh%2B%2F%3D%26%3F")))
+                .andRespond(withSuccess("""
+                        {"access_token":"new-access","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"bearer"}
+                        """, MediaType.APPLICATION_JSON));
+        var exchange = new TwitchCodeExchange(builder.build(), properties, oauth, Clock.fixed(now, ZoneOffset.UTC));
+        var tokens = exchange.refresh("refresh+/=&?");
+        assertThat(tokens.refreshToken()).isEqualTo("rotated-refresh");
+        assertThat(tokens.accessToken()).isEqualTo("new-access");
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {400, 401})
+    void invalidRefreshTokenRequiresNewAuthorization(int status) {
+        server.expect(requestTo(properties.tokenUrl())).andRespond(withStatus(HttpStatus.valueOf(status))
+                .body("private-refresh upstream details"));
+        var exchange = new TwitchCodeExchange(builder.build(), properties, oauth, Clock.systemUTC());
+        assertThatThrownBy(() -> exchange.refresh("private-refresh"))
+                .isInstanceOf(TwitchReauthorizationRequiredException.class).hasMessageNotContaining("private-refresh");
+        server.verify();
+    }
+
+    @Test
+    void temporaryRefreshFailureDoesNotRequireNewConsent() {
+        server.expect(requestTo(properties.tokenUrl())).andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        var exchange = new TwitchCodeExchange(builder.build(), properties, oauth, Clock.systemUTC());
+        assertThatThrownBy(() -> exchange.refresh("private-refresh")).isInstanceOf(PlatformUnavailableException.class);
+        server.verify();
+    }
     @Test
     void exchangesCodeInFormBodyAndRedactsReturnedTokens() {
         server.expect(requestTo(properties.tokenUrl())).andExpect(method(HttpMethod.POST))
