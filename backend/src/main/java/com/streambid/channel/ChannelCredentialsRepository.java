@@ -32,6 +32,15 @@ public class ChannelCredentialsRepository {
                 .set(EXPIRES, credentials.expiresAt()).set(VALIDATED, credentials.lastValidatedAt()).execute();
     }
 
+    public Optional<ChannelCredentials> lock(UUID channelId) {
+        return database.select(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
+                .from(DSL.table(DSL.name("channel_credentials"))).where(CHANNEL_ID.eq(channelId))
+                .forUpdate().fetchOptionalInto(ChannelCredentials.class);
+    }
+
+    public void delete(UUID channelId) {
+        database.deleteFrom(DSL.table(DSL.name("channel_credentials"))).where(CHANNEL_ID.eq(channelId)).execute();
+    }
     public Optional<ChannelCredentials> find(UUID channelId) {
         return database.select(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
                 .from(DSL.table(DSL.name("channel_credentials"))).where(CHANNEL_ID.eq(channelId))

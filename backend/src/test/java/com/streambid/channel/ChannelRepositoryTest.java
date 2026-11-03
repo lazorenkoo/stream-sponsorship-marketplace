@@ -7,6 +7,11 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.Base64;
+import com.streambid.platform.twitch.TwitchCredentialRefresh;
+import com.streambid.platform.twitch.TwitchCodeExchange;
+import com.streambid.platform.twitch.TwitchReauthorizationRequiredException;
+import org.junit.jupiter.api.BeforeEach;
+import static org.mockito.Mockito.*;
 import com.streambid.platform.ChannelInfo;
 import com.streambid.platform.twitch.TwitchConnectionStore;
 import com.streambid.platform.twitch.TwitchUserTokens;
@@ -71,6 +76,15 @@ class ChannelRepositoryTest {
     @TestConfiguration
     static class StoreConfiguration {
         @Bean
+        TwitchCodeExchange tokenExchange() {
+            return mock(TwitchCodeExchange.class);
+        }
+        @Bean
+        TwitchCredentialRefresh refresh(ChannelCredentialsRepository credentials, TwitchCodeExchange exchange) {
+            return new TwitchCredentialRefresh(credentials,
+                    new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), exchange);
+        }
+        @Bean
         TwitchConnectionStore store(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users) {
             return new TwitchConnectionStore(channels, credentials, users,
                     new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), Clock.systemUTC());
@@ -83,6 +97,46 @@ class ChannelRepositoryTest {
     @Autowired
     DSLContext database;
 
+    @Autowired TwitchCredentialRefresh refreshService;
+    @Autowired TwitchCodeExchange exchange;
+
+    @BeforeEach
+    void resetExchangeMock() {
+        reset(exchange);
+    }
+
+    private ConnectedChannel channelForRefresh(String email) {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Refresh"));
+        return store.save(owner, new ChannelInfo(email, "Refresh", null),
+                new TwitchUserTokens("old-access", "old-refresh", java.time.Instant.now().plusSeconds(3600)));
+    }
+
+    @Test
+    void storesRotationOnceAndIgnoresStaleRejectedToken() {
+        var channel = channelForRefresh("rotation@example.com");
+        var rotated = new TwitchUserTokens("new-access", "new-refresh",
+                java.time.Instant.now().plusSeconds(3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        when(exchange.refresh("old-refresh")).thenReturn(rotated);
+        assertThat(refreshService.refreshRejected(channel.id(), "old-access")).isEqualTo(rotated);
+        assertThat(refreshService.refreshRejected(channel.id(), "old-access")).isEqualTo(rotated);
+        verify(exchange, times(1)).refresh("old-refresh");
+        var cipher = new TokenCipher(Base64.getEncoder().encodeToString(new byte[32]));
+        var saved = credentials.find(channel.id()).orElseThrow();
+        assertThat(cipher.decrypt(saved.refreshTokenCiphertext(), channel.id() + ":refresh")).isEqualTo("new-refresh");
+    }
+
+    @Test
+    void revokedRefreshRemovesCredentialsAndStopsFurtherAttempts() {
+        var channel = channelForRefresh("revoked@example.com");
+        when(exchange.refresh("old-refresh")).thenThrow(new TwitchReauthorizationRequiredException());
+        assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "old-access"))
+                .isInstanceOf(TwitchReauthorizationRequiredException.class);
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "old-access"))
+                .isInstanceOf(TwitchReauthorizationRequiredException.class);
+        verify(exchange, times(1)).refresh("old-refresh");
+    }
     @Test
     void reconnectKeepsChannelIdAndDoesNotTransferOwnership() {
         UUID owner = UUID.randomUUID();
