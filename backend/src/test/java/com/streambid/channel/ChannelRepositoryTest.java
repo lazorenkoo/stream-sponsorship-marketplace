@@ -6,6 +6,8 @@ import com.streambid.user.UserRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.Base64;
+import com.streambid.security.TokenCipher;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -51,6 +53,29 @@ class ChannelRepositoryTest {
     @Autowired
     MockMvc mvc;
 
+    @Autowired
+    ChannelCredentialsRepository credentials;
+
+    @Test
+    void storesOnlyEncryptedCredentialsBoundToChannel() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "encrypted@example.com", "hash", "Encrypted"));
+        var now = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+        var channel = new ConnectedChannel(UUID.randomUUID(), owner, StreamingPlatform.TWITCH,
+                "encrypted-channel", "Encrypted", now);
+        channels.saveVerified(channel);
+        var cipher = new TokenCipher(Base64.getEncoder().encodeToString(new byte[32]));
+        String access = cipher.encrypt("private-access", channel.id() + ":access");
+        String refresh = cipher.encrypt("private-refresh", channel.id() + ":refresh");
+        var saved = new ChannelCredentials(channel.id(), access, refresh, now.plusHours(1), now);
+        credentials.save(saved);
+        var loaded = credentials.find(channel.id()).orElseThrow();
+        assertThat(loaded).isEqualTo(saved);
+        assertThat(loaded.accessTokenCiphertext()).doesNotContain("private-access");
+        assertThat(loaded.refreshTokenCiphertext()).doesNotContain("private-refresh");
+        assertThat(cipher.decrypt(loaded.accessTokenCiphertext(), channel.id() + ":access")).isEqualTo("private-access");
+        assertThat(loaded.toString()).isEqualTo("ChannelCredentials[redacted]");
+    }
     @Test
     void channelApiUsesAuthenticatedOwnerInsteadOfQueryParameter() throws Exception {
         UUID owner = UUID.randomUUID();

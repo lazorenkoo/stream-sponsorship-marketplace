@@ -1,0 +1,37 @@
+package com.streambid.channel;
+
+import java.time.OffsetDateTime;
+import java.util.Optional;
+import java.util.UUID;
+import org.jooq.DSLContext;
+import org.jooq.Field;
+import org.jooq.impl.DSL;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class ChannelCredentialsRepository {
+
+    private static final Field<UUID> CHANNEL_ID = DSL.field(DSL.name("channel_id"), UUID.class);
+    private static final Field<String> ACCESS = DSL.field(DSL.name("access_token_ciphertext"), String.class);
+    private static final Field<String> REFRESH = DSL.field(DSL.name("refresh_token_ciphertext"), String.class);
+    private static final Field<OffsetDateTime> EXPIRES = DSL.field(DSL.name("expires_at"), OffsetDateTime.class);
+    private static final Field<OffsetDateTime> VALIDATED = DSL.field(DSL.name("last_validated_at"), OffsetDateTime.class);
+    private final DSLContext database;
+
+    public ChannelCredentialsRepository(DSLContext database) {
+        this.database = database;
+    }
+
+    public void save(ChannelCredentials credentials) {
+        database.insertInto(DSL.table(DSL.name("channel_credentials")))
+                .columns(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
+                .values(credentials.channelId(), credentials.accessTokenCiphertext(), credentials.refreshTokenCiphertext(),
+                        credentials.expiresAt(), credentials.lastValidatedAt()).execute();
+    }
+
+    public Optional<ChannelCredentials> find(UUID channelId) {
+        return database.select(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
+                .from(DSL.table(DSL.name("channel_credentials"))).where(CHANNEL_ID.eq(channelId))
+                .fetchOptionalInto(ChannelCredentials.class);
+    }
+}
