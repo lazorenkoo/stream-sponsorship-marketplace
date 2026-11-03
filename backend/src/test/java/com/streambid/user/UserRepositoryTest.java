@@ -66,6 +66,37 @@ class UserRepositoryTest {
     ObjectMapper json;
 
     @Test
+    void roleChangeInvalidatesSessionAndAppliesOnNextLogin() throws Exception {
+        registration.register(new RegisterRequest(
+                "refresh@example.com", "strong-password", "Refresh", UserRole.STREAMER));
+        var login = mvc.perform(post("/api/auth/login").with(csrf())
+                .param("email", "refresh@example.com").param("password", "strong-password"))
+                .andExpect(status().isNoContent()).andReturn();
+        var session = (MockHttpSession) login.getRequest().getSession(false);
+        mvc.perform(post("/api/users/me/roles").session(session).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"ADVERTISER\"}"))
+                .andExpect(status().isNoContent());
+        assertThat(session.isInvalid()).isTrue();
+        var nextLogin = mvc.perform(post("/api/auth/login").with(csrf())
+                .param("email", "refresh@example.com").param("password", "strong-password"))
+                .andExpect(status().isNoContent()).andReturn();
+        var nextSession = (MockHttpSession) nextLogin.getRequest().getSession(false);
+        mvc.perform(get("/api/users/me").session(nextSession)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.roles.length()").value(2));
+        assertThat(accounts.loadUserByUsername("refresh@example.com").getAuthorities())
+                .extracting("authority").contains("ROLE_ADVERTISER");
+    }
+
+    @Test
+    void roleMutationRequiresLoginAndKnownRole() throws Exception {
+        mvc.perform(post("/api/users/me/roles").with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"STREAMER\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/users/me/roles").with(user("any@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"UNKNOWN\"}"))
+                .andExpect(status().isBadRequest());
+    }
+    @Test
     void addsSecondPublicRoleButRejectsAdmin() throws Exception {
         var profile = registration.register(new RegisterRequest(
                 "second@example.com", "strong-password", "Second", UserRole.STREAMER));
