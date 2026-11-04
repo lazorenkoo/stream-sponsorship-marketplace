@@ -17,7 +17,7 @@ class StatisticsConfigurationTest {
                     ValidationAutoConfiguration.class))
             .withBean(ChannelRepository.class, () -> channels)
             .withBean(ChannelStatisticsCollector.class, () -> collector)
-            .withUserConfiguration(StatisticsConfiguration.class, ChannelStatisticsJob.class);
+            .withUserConfiguration(StatisticsSettingsConfiguration.class, StatisticsConfiguration.class, ChannelStatisticsJob.class);
 
     @Test
     void enabledConfigurationBindsIntervalWithoutStartingCollectionImmediately() {
@@ -47,6 +47,6 @@ class StatisticsConfigurationTest {
     void disabledConfigurationHasNoJob() {
         runner.withPropertyValues("statistics.enabled=false").run(context ->
                 assertThat(context).hasNotFailed().doesNotHaveBean(ChannelStatisticsJob.class)
-                        .doesNotHaveBean(StatisticsProperties.class));
+                        .hasSingleBean(StatisticsProperties.class));
     }
 }

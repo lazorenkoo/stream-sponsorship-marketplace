@@ -17,6 +17,16 @@ public class ChannelMeasurementRepository {
         this.database = database;
     }
 
+    public MeasurementAvailability availability(UUID channelId, UUID owner) {
+        var row = database.fetchOne("""
+                SELECT MIN(m.measured_at) AS first, MAX(m.measured_at) AS last
+                FROM channel_measurements m JOIN connected_channels c ON c.id = m.channel_id
+                WHERE c.id = ? AND c.user_id = ?
+                """, channelId, owner);
+        var first = row.get("first", OffsetDateTime.class);
+        var last = row.get("last", OffsetDateTime.class);
+        return new MeasurementAvailability(first == null ? null : first.toInstant(), last == null ? null : last.toInstant());
+    }
     public int deleteBefore(Instant cutoff, int limit) {
         if (cutoff == null || limit < 1 || limit > 1000) {
             throw new IllegalArgumentException("Retention cutoff is required and batch limit must be between 1 and 1000");

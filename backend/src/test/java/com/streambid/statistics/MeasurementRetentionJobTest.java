@@ -42,7 +42,7 @@ class MeasurementRetentionJobTest {
     void configurationRequiresExplicitEnablement() {
         var runner = new ApplicationContextRunner()
                 .withBean(ChannelMeasurementRepository.class, () -> measurements)
-                .withUserConfiguration(MeasurementRetentionConfiguration.class);
+                .withUserConfiguration(StatisticsSettingsConfiguration.class, MeasurementRetentionConfiguration.class);
         runner.run(context -> assertThat(context).hasNotFailed().doesNotHaveBean(MeasurementRetentionJob.class));
         runner.withPropertyValues("statistics.retention.enabled=true", "statistics.retention.days=30").run(context -> {
             assertThat(context).hasNotFailed().hasSingleBean(MeasurementRetentionJob.class);

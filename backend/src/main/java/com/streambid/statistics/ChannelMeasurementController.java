@@ -20,12 +20,19 @@ public class ChannelMeasurementController {
     private final ChannelRepository channels;
     private final UserRepository users;
     private final ChannelMeasurementRepository measurements;
+    private final StatisticsProperties properties;
+    private final StatisticsRetentionProperties retention;
+    private final boolean collectionEnabled;
 
     public ChannelMeasurementController(ChannelRepository channels, UserRepository users,
-                                        ChannelMeasurementRepository measurements) {
+                                        ChannelMeasurementRepository measurements, StatisticsProperties properties,
+            StatisticsRetentionProperties retention, @org.springframework.beans.factory.annotation.Value("${statistics.enabled:false}") boolean collectionEnabled) {
         this.channels = channels;
         this.users = users;
         this.measurements = measurements;
+        this.properties = properties;
+        this.retention = retention;
+        this.collectionEnabled = collectionEnabled;
     }
 
     @GetMapping("/api/channels/{channelId}/statistics")
@@ -55,6 +62,13 @@ public class ChannelMeasurementController {
                 .body(measurements.hourly(channelId, owner, range.from(), range.to()));
     }
 
+    @GetMapping("/api/channels/{channelId}/statistics/metadata")
+    public ResponseEntity<StatisticsMetadata> metadata(@PathVariable UUID channelId, Principal principal) {
+        UUID owner = requireOwner(channelId, principal);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new StatisticsMetadata(
+                measurements.availability(channelId, owner), collectionEnabled, properties.getIntervalMs(),
+                retention.enabled(), retention.enabled() ? retention.days() : null, 31));
+    }
     private UUID requireOwner(UUID channelId, Principal principal) {
         var user = users.findByEmail(principal.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));

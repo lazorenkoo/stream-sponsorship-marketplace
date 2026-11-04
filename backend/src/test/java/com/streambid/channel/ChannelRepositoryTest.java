@@ -394,6 +394,24 @@ class ChannelRepositoryTest {
         assertThatThrownBy(() -> measurements.deleteBefore(cutoff, 0)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> measurements.deleteBefore(cutoff, 1001)).isInstanceOf(IllegalArgumentException.class);
     }
+    @Test
+    void statisticsMetadataReportsActualAvailabilityAndDisabledRetention() throws Exception {
+        var channel = channelForRefresh("metadata@example.com");
+        String path = "/api/channels/" + channel.id() + "/statistics/metadata";
+        mvc.perform(get(path).with(user("metadata@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability.firstMeasuredAt").doesNotExist())
+                .andExpect(jsonPath("$.retentionEnabled").value(false)).andExpect(jsonPath("$.retentionDays").doesNotExist());
+        var now = java.time.Instant.parse("2026-11-04T15:37:00Z");
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), now,
+                com.streambid.platform.StreamState.UNKNOWN, null));
+        mvc.perform(get(path).with(user("metadata@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability.firstMeasuredAt").value(now.toString()))
+                .andExpect(jsonPath("$.availability.lastMeasuredAt").value(now.toString()))
+                .andExpect(jsonPath("$.collectionEnabled").value(false)).andExpect(jsonPath("$.maxRangeDays").value(31));
+        users.save(new UserAccount(UUID.randomUUID(), "metadata-foreign@example.com", "hash", "Foreign"));
+        mvc.perform(get(path).with(user("metadata-foreign@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
