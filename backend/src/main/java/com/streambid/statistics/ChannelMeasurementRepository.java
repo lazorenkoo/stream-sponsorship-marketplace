@@ -26,6 +26,26 @@ public class ChannelMeasurementRepository {
                 measurement.state().name(), measurement.viewers(), measurement.channelId()) == 1;
     }
 
+    public List<HourlyStatistics> hourly(UUID channelId, UUID owner, Instant from, Instant to) {
+        var range = new MeasurementRange(from, to);
+        return database.fetch("""
+                SELECT date_trunc('hour', m.measured_at, 'UTC') AS hour,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE m.state = 'LIVE') AS live,
+                       COUNT(*) FILTER (WHERE m.state = 'UNKNOWN') AS unknown,
+                       COUNT(m.viewers) FILTER (WHERE m.state = 'LIVE') AS known,
+                       AVG(m.viewers) FILTER (WHERE m.state = 'LIVE') AS average,
+                       MAX(m.viewers) FILTER (WHERE m.state = 'LIVE') AS peak
+                FROM channel_measurements m JOIN connected_channels c ON c.id = m.channel_id
+                WHERE c.id = ? AND c.user_id = ?
+                  AND m.measured_at >= CAST(? AS timestamptz) AND m.measured_at < CAST(? AS timestamptz)
+                GROUP BY hour ORDER BY hour
+                """, channelId, owner, OffsetDateTime.ofInstant(range.from(), ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(range.to(), ZoneOffset.UTC)).map(row -> new HourlyStatistics(
+                        row.get("hour", OffsetDateTime.class).toInstant(), row.get("total", Long.class),
+                        row.get("live", Long.class), row.get("unknown", Long.class), row.get("known", Long.class),
+                        row.get("average", java.math.BigDecimal.class), row.get("peak", Long.class)));
+    }
     public ChannelStatisticsSummary summarize(UUID channelId, UUID owner, Instant from, Instant to) {
         var range = new MeasurementRange(from, to);
         from = range.from();

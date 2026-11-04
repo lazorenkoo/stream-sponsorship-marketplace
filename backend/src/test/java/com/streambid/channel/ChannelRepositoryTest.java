@@ -323,6 +323,34 @@ class ChannelRepositoryTest {
         }
         mvc.perform(get(path).with(user("summary-api@example.com"))).andExpect(status().isBadRequest());
     }
+    @Test
+    void hourlyStatisticsUsesUtcBoundariesAndLeavesGapsEmpty() {
+        var channel = channelForRefresh("hourly@example.com");
+        var start = java.time.Instant.parse("2026-11-03T23:00:00Z");
+        var times = java.util.List.of(start.plusSeconds(3599), start.plusSeconds(3600), start.plusSeconds(3660),
+                start.plusSeconds(10800));
+        Long[] viewers = {null, 0L, 20L, 999L};
+        for (int index = 0; index < times.size(); index++) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    times.get(index), index == 0 ? com.streambid.platform.StreamState.UNKNOWN
+                            : com.streambid.platform.StreamState.LIVE, viewers[index]));
+        }
+        var buckets = measurements.hourly(channel.id(), channel.userId(), start, start.plusSeconds(10800));
+        assertThat(buckets).hasSize(2);
+        assertThat(buckets.getFirst().hour()).isEqualTo(start);
+        assertThat(buckets.getFirst().unknownSamples()).isEqualTo(1);
+        assertThat(buckets.getFirst().knownViewerSamples()).isZero();
+        assertThat(buckets.getFirst().averageViewers()).isNull();
+        assertThat(buckets.getFirst().peakViewers()).isNull();
+        assertThat(buckets.getLast().hour()).isEqualTo(start.plusSeconds(3600));
+        assertThat(buckets.getLast().totalSamples()).isEqualTo(2);
+        assertThat(buckets.getLast().liveSamples()).isEqualTo(2);
+        assertThat(buckets.getLast().knownViewerSamples()).isEqualTo(2);
+        assertThat(buckets.getLast().averageViewers()).isEqualByComparingTo("10");
+        assertThat(buckets.getLast().peakViewers()).isEqualTo(20);
+        assertThat(measurements.hourly(channel.id(), UUID.randomUUID(), start, start.plusSeconds(10800))).isEmpty();
+        assertThat(measurements.hourly(channel.id(), channel.userId(), start.minusSeconds(3600), start)).isEmpty();
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
