@@ -12,6 +12,7 @@ import java.security.Principal;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,6 +33,12 @@ public class CampaignController {
             @RequestParam(required = false) Instant before, @RequestParam(required = false) UUID beforeId) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .body(drafts.listOwned(principal.getName(), before, beforeId, limit));
+    }
+    @PutMapping("/api/campaigns/{id}")
+    public ResponseEntity<Campaign> update(@PathVariable UUID id, Principal principal,
+            @Valid @RequestBody CampaignDraftUpdateRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(drafts.update(principal.getName(), id, request));
     }
     @PostMapping("/api/campaigns")
     public ResponseEntity<Campaign> create(Principal principal, @Valid @RequestBody CampaignDraftRequest request) {

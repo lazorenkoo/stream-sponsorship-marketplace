@@ -4,6 +4,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.test.web.servlet.MockMvc;
 import com.streambid.user.UserRole;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -46,6 +47,35 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Test
+    void updateApiRequiresCurrentVersionOwnerAndCsrf() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "edit-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "edit-other@example.com", "hash", "Other"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.ADVERTISER);
+        var now = Instant.parse("2026-11-04T18:54:00Z");
+        var original = new Campaign(UUID.randomUUID(), owner, "Original", "Brief", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(original);
+        String path = "/api/campaigns/" + original.id();
+        String body = json.writeValueAsString(new CampaignDraftUpdateRequest("Changed", "New brief", 0L));
+        mvc.perform(put(path).with(user("edit-owner@example.com")).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.title").value("Changed")).andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(put(path).with(user("edit-owner@example.com")).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isConflict());
+        mvc.perform(put(path).with(user("edit-other@example.com")).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        mvc.perform(put(path).with(user("edit-owner@example.com")).contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        String invalid = json.writeValueAsString(new CampaignDraftUpdateRequest("", "", 1L));
+        mvc.perform(put(path).with(user("edit-owner@example.com")).with(csrf()).contentType("application/json").content(invalid))
+                .andExpect(status().isBadRequest());
+        assertThat(campaigns.findOwned(original.id(), owner).orElseThrow().version()).isEqualTo(1);
+        assertThat(campaigns.findOwned(original.id(), owner).orElseThrow().title()).isEqualTo("Changed");
+    }
+
     @Test
     void draftUpdatesRequireOwnerAndCurrentVersion() {
         UUID owner = UUID.randomUUID();

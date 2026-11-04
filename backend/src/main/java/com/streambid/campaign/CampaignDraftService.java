@@ -12,16 +12,23 @@ import org.springframework.web.server.ResponseStatusException;
 public class CampaignDraftService {
     private final CampaignRepository campaigns;
     private final UserRepository users;
+    private final java.time.Clock clock;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public CampaignDraftService(CampaignRepository campaigns, UserRepository users) {
+        this(campaigns, users, java.time.Clock.systemUTC());
+    }
+
+    CampaignDraftService(CampaignRepository campaigns, UserRepository users, java.time.Clock clock) {
         this.campaigns = campaigns;
         this.users = users;
+        this.clock = clock;
     }
 
     @Transactional
     public Campaign create(String email, CampaignDraftRequest request) {
         var user = requireAdvertiser(email);
-        var now = Instant.now();
+        var now = clock.instant();
         Campaign draft;
         try {
             draft = new Campaign(UUID.randomUUID(), user.id(), request.title(), request.description(),
@@ -45,6 +52,23 @@ public class CampaignDraftService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Limit must be 1 to 100 and cursor requires time and ID");
         }
         return campaigns.listOwned(user.id(), before, beforeId, limit);
+    }
+    @Transactional
+    public Campaign update(String email, UUID id, CampaignDraftUpdateRequest request) {
+        var user = requireAdvertiser(email);
+        var current = campaigns.findOwned(id, user.id())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        var now = clock.instant();
+        var updatedAt = now.isBefore(current.updatedAt()) ? current.updatedAt() : now;
+        Campaign changed;
+        try {
+            changed = new Campaign(current.id(), current.advertiserId(), request.title(), request.description(),
+                    current.status(), current.createdAt(), updatedAt, current.version());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
+        }
+        return campaigns.updateDraft(changed, request.expectedVersion())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Campaign has changed; reload before editing"));
     }
     private com.streambid.user.UserAccount requireAdvertiser(String email) {
         var user = users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
