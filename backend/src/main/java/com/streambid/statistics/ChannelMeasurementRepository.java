@@ -17,6 +17,19 @@ public class ChannelMeasurementRepository {
         this.database = database;
     }
 
+    public int deleteBefore(Instant cutoff, int limit) {
+        if (cutoff == null || limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("Retention cutoff is required and batch limit must be between 1 and 1000");
+        }
+        return database.execute("""
+                WITH expired AS (
+                    SELECT id FROM channel_measurements
+                    WHERE measured_at < CAST(? AS timestamptz)
+                    ORDER BY measured_at, id LIMIT ? FOR UPDATE SKIP LOCKED
+                )
+                DELETE FROM channel_measurements m USING expired WHERE m.id = expired.id
+                """, OffsetDateTime.ofInstant(cutoff.truncatedTo(java.time.temporal.ChronoUnit.MICROS), ZoneOffset.UTC), limit);
+    }
     public boolean saveIfConnected(ChannelMeasurement measurement) {
         return database.execute("""
                 INSERT INTO channel_measurements (id, channel_id, measured_at, state, viewers)

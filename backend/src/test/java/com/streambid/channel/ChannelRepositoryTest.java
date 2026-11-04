@@ -374,6 +374,26 @@ class ChannelRepositoryTest {
         mvc.perform(get(path).with(user("hourly-api@example.com")).param("from", to).param("to", from.toString()))
                 .andExpect(status().isBadRequest());
     }
+    @Test
+    void retentionDeletesOnlyExpiredMeasurementsInBoundedBatches() {
+        var channel = channelForRefresh("retention@example.com");
+        var cutoff = java.time.Instant.parse("2026-11-04T14:43:00Z");
+        for (int offset : new int[] {-2, -1, 0, 1}) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    cutoff.plusSeconds(offset), com.streambid.platform.StreamState.UNKNOWN, null));
+        }
+        assertThat(measurements.deleteBefore(cutoff, 1)).isEqualTo(1);
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).hasSize(3);
+        assertThat(measurements.deleteBefore(cutoff, 1000)).isEqualTo(1);
+        assertThat(measurements.deleteBefore(cutoff, 1000)).isZero();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10))
+                .extracting(com.streambid.statistics.ChannelMeasurement::measuredAt)
+                .containsExactly(cutoff.plusSeconds(1), cutoff);
+        assertThat(channels.find(channel.id())).isPresent();
+        assertThat(credentials.find(channel.id())).isPresent();
+        assertThatThrownBy(() -> measurements.deleteBefore(cutoff, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> measurements.deleteBefore(cutoff, 1001)).isInstanceOf(IllegalArgumentException.class);
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
