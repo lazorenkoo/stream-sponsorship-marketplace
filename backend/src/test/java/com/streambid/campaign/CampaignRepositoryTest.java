@@ -4,6 +4,8 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.test.web.servlet.MockMvc;
 import com.streambid.user.UserRole;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,6 +46,46 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
+
+    @Test
+    void rejectsInvalidDraftContentWithoutPersistingCampaigns() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "invalid-draft@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        for (CampaignDraftRequest invalid : new CampaignDraftRequest[] {
+                new CampaignDraftRequest(null, ""), new CampaignDraftRequest(" ", ""),
+                new CampaignDraftRequest("x".repeat(121), ""), new CampaignDraftRequest("Line\nbreak", ""),
+                new CampaignDraftRequest("Title", null), new CampaignDraftRequest("Title", "x".repeat(5001)),
+                new CampaignDraftRequest("Title", "null\0character")}) {
+            mvc.perform(post("/api/campaigns").with(user("invalid-draft@example.com")).with(csrf())
+                    .contentType("application/json").content(json.writeValueAsString(invalid)))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(campaigns.listOwned(owner, null, null, 100)).isEmpty();
+    }
+
+    @Test
+    void createdLocationCanBeReadOnlyByOwner() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "read-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "read-other@example.com", "hash", "Other"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.ADVERTISER);
+        var created = mvc.perform(post("/api/campaigns").with(user("read-owner@example.com")).with(csrf())
+                .contentType("application/json").content("{\"title\":\"Draft\",\"description\":\"Brief\"}"))
+                .andExpect(status().isCreated()).andExpect(header().string("Cache-Control", "no-store")).andReturn();
+        String location = created.getResponse().getHeader("Location");
+        assertThat(location).startsWith("/api/campaigns/");
+        mvc.perform(get(location).with(user("read-owner@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("Draft")).andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(get(location).with(user("read-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(location)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/campaigns/" + UUID.randomUUID()).with(user("read-owner@example.com")))
+                .andExpect(status().isNotFound());
+    }
+
 
     @Test
     void advertiserCreatesOwnDraftAndCannotForgeServerFields() throws Exception {

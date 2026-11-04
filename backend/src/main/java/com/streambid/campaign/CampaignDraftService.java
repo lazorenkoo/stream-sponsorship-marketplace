@@ -20,10 +20,7 @@ public class CampaignDraftService {
 
     @Transactional
     public Campaign create(String email, CampaignDraftRequest request) {
-        var user = users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
-        if (!users.findRoles(user.id()).contains("ADVERTISER")) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-        }
+        var user = requireAdvertiser(email);
         var now = Instant.now();
         Campaign draft;
         try {
@@ -34,5 +31,18 @@ public class CampaignDraftService {
         }
         campaigns.insert(draft);
         return draft;
+    }
+    @Transactional(readOnly = true)
+    public Campaign findOwned(String email, UUID id) {
+        var user = requireAdvertiser(email);
+        return campaigns.findOwned(id, user.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    private com.streambid.user.UserAccount requireAdvertiser(String email) {
+        var user = users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        if (!users.findRoles(user.id()).contains("ADVERTISER")) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        }
+        return user;
     }
 }
