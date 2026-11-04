@@ -23,16 +23,21 @@ public class ChannelMeasurementController {
     private final StatisticsProperties properties;
     private final StatisticsRetentionProperties retention;
     private final boolean collectionEnabled;
+    private final com.streambid.channel.ChannelCredentialsRepository credentials;
+    private final com.streambid.platform.PlatformRegistry platforms;
 
     public ChannelMeasurementController(ChannelRepository channels, UserRepository users,
                                         ChannelMeasurementRepository measurements, StatisticsProperties properties,
-            StatisticsRetentionProperties retention, @org.springframework.beans.factory.annotation.Value("${statistics.enabled:false}") boolean collectionEnabled) {
+            StatisticsRetentionProperties retention, com.streambid.channel.ChannelCredentialsRepository credentials,
+            com.streambid.platform.PlatformRegistry platforms, @org.springframework.beans.factory.annotation.Value("${statistics.enabled:false}") boolean collectionEnabled) {
         this.channels = channels;
         this.users = users;
         this.measurements = measurements;
         this.properties = properties;
         this.retention = retention;
         this.collectionEnabled = collectionEnabled;
+        this.credentials = credentials;
+        this.platforms = platforms;
     }
 
     @GetMapping("/api/channels/{channelId}/statistics")
@@ -64,17 +69,23 @@ public class ChannelMeasurementController {
 
     @GetMapping("/api/channels/{channelId}/statistics/metadata")
     public ResponseEntity<StatisticsMetadata> metadata(@PathVariable UUID channelId, Principal principal) {
-        UUID owner = requireOwner(channelId, principal);
+        var channel = requireOwnedChannel(channelId, principal);
+        boolean providerAvailable = platforms.find(channel.platform()).isPresent();
+        boolean authorizationRequired = credentials.find(channelId).isEmpty();
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new StatisticsMetadata(
-                measurements.availability(channelId, owner), collectionEnabled, properties.getIntervalMs(),
-                retention.enabled(), retention.enabled() ? retention.days() : null, 31));
+                measurements.availability(channelId, channel.userId()), collectionEnabled, properties.getIntervalMs(),
+                retention.enabled(), retention.enabled() ? retention.days() : null, 31, providerAvailable, authorizationRequired,
+                collectionEnabled && providerAvailable && !authorizationRequired));
     }
     private UUID requireOwner(UUID channelId, Principal principal) {
+        return requireOwnedChannel(channelId, principal).userId();
+    }
+
+    private com.streambid.channel.ConnectedChannel requireOwnedChannel(UUID channelId, Principal principal) {
         var user = users.findByEmail(principal.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
-        channels.find(channelId).filter(channel -> channel.userId().equals(user.id()))
+        return channels.find(channelId).filter(channel -> channel.userId().equals(user.id()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        return user.id();
     }
 
     private MeasurementRange requireRange(Instant from, Instant to) {
