@@ -63,6 +63,17 @@ public class ChannelRepository {
                 .leftJoin(DSL.table(DSL.name("channel_credentials"))).on(ID.eq(credentialId))
                 .where(USER_ID.eq(userId)).orderBy(PLATFORM, EXTERNAL_ID).fetchInto(ChannelSummary.class);
     }
+    public List<ConnectedChannel> connectedAfter(UUID after, int limit) {
+        if (limit < 1 || limit > 200) {
+            throw new IllegalArgumentException("Channel batch limit must be between 1 and 200");
+        }
+        return database.select(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
+                .from(DSL.table(DSL.name("connected_channels")))
+                .join(DSL.table(DSL.name("channel_credentials")))
+                .on(ID.eq(DSL.field(DSL.name("channel_credentials", "channel_id"), UUID.class)))
+                .where(after == null ? DSL.trueCondition() : ID.gt(after))
+                .orderBy(ID).limit(limit).fetchInto(ConnectedChannel.class);
+    }
     public List<ConnectedChannel> findByUser(UUID userId) {
         return database.select(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
                 .from(DSL.table(DSL.name("connected_channels")))

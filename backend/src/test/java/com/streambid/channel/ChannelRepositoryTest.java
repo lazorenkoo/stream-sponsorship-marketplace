@@ -185,6 +185,40 @@ class ChannelRepositoryTest {
         assertThatThrownBy(() -> measurements.history(channel.id(), channel.userId(), null, 201))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+    @Test
+    void collectorCandidatesUseKeysetAndExcludeDisconnectedChannels() {
+        var first = channelForRefresh("candidate-one@example.com");
+        var second = channelForRefresh("candidate-two@example.com");
+        var page = channels.connectedAfter(null, 1);
+        assertThat(page).hasSize(1);
+        var next = channels.connectedAfter(page.getFirst().id(), 1);
+        assertThat(next).hasSize(1);
+        assertThat(java.util.Set.of(page.getFirst().id(), next.getFirst().id()))
+                .containsExactlyInAnyOrder(first.id(), second.id());
+        assertThat(channels.connectedAfter(next.getFirst().id(), 1)).isEmpty();
+        credentials.delete(first.id());
+        assertThat(channels.connectedAfter(null, 200)).containsExactly(second);
+        assertThatThrownBy(() -> channels.connectedAfter(null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> channels.connectedAfter(null, 201)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void databaseRejectsInvalidMeasurementStatesAndViewers() {
+        var channel = channelForRefresh("measurement-constraints@example.com");
+        try {
+            String sql = "INSERT INTO channel_measurements (id, channel_id, measured_at, state, viewers) "
+                    + "VALUES (?, ?, CURRENT_TIMESTAMP, ?, CAST(? AS bigint))";
+            for (Object[] invalid : new Object[][] {{"LIVE", -1L}, {"OFFLINE", 0L}, {"UNKNOWN", 1L}, {"INVALID", null}}) {
+                assertThatThrownBy(() -> database.execute(sql, UUID.randomUUID(), channel.id(), invalid[0], invalid[1]))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            }
+            assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).isEmpty();
+        } finally {
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
+        }
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
