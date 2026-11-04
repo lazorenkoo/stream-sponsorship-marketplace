@@ -84,6 +84,15 @@ public class CampaignDraftService {
         recordEvent(saved, CampaignEventType.ARCHIVED);
         return saved;
     }
+    @Transactional(readOnly = true)
+    public java.util.List<CampaignEvent> history(String email, UUID id, Long beforeVersion, int limit) {
+        var user = requireAdvertiser(email);
+        campaigns.findOwned(id, user.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100 || (beforeVersion != null && beforeVersion < 0)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "History limit must be 1 to 100 and version nonnegative");
+        }
+        return events.findOwned(id, user.id(), beforeVersion, limit);
+    }
     private void recordEvent(Campaign campaign, CampaignEventType type) {
         events.append(new CampaignEvent(campaign.id(), campaign.version(), campaign.advertiserId(), type, campaign.updatedAt()));
     }

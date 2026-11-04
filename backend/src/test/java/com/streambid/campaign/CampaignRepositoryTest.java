@@ -48,6 +48,38 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void historyApiIsOwnedPagedAndSkipsFailedEdits() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "history-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "history-other@example.com", "hash", "Other"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.ADVERTISER);
+        var campaign = drafts.create("history-owner@example.com", new CampaignDraftRequest("Draft", ""));
+        drafts.update("history-owner@example.com", campaign.id(), new CampaignDraftUpdateRequest("Edited", "", 0L));
+        String path = "/api/campaigns/" + campaign.id();
+        mvc.perform(put(path).with(user("history-owner@example.com")).with(csrf()).contentType("application/json")
+                .content(json.writeValueAsString(new CampaignDraftUpdateRequest("Stale", "", 0L))))
+                .andExpect(status().isConflict());
+        mvc.perform(get(path + "/events").with(user("history-owner@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].campaignVersion").value(1)).andExpect(jsonPath("$[0].type").value("EDITED"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(get(path + "/events").with(user("history-owner@example.com")).param("beforeVersion", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].type").value("CREATED"));
+        mvc.perform(get(path + "/events").with(user("history-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path + "/events")).andExpect(status().isUnauthorized());
+        for (String invalid : new String[] {"0", "101", "text"}) {
+            mvc.perform(get(path + "/events").with(user("history-owner@example.com")).param("limit", invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path + "/events").with(user("history-owner@example.com")).param("beforeVersion", "-1"))
+                .andExpect(status().isBadRequest());
+        assertThat(events.findOwned(campaign.id(), owner, null, 100)).hasSize(2);
+    }
+
+    @Test
     void serviceRecordsCompleteCampaignLifecycle() {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, "lifecycle@example.com", "hash", "Owner"));

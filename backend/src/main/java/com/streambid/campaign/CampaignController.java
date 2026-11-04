@@ -47,6 +47,12 @@ public class CampaignController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .body(drafts.archive(principal.getName(), id, request));
     }
+    @GetMapping("/api/campaigns/{id}/events")
+    public ResponseEntity<List<CampaignEvent>> history(@PathVariable UUID id, Principal principal,
+            @RequestParam(defaultValue = "20") int limit, @RequestParam(required = false) Long beforeVersion) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(drafts.history(principal.getName(), id, beforeVersion, limit));
+    }
     @PostMapping("/api/campaigns")
     public ResponseEntity<Campaign> create(Principal principal, @Valid @RequestBody CampaignDraftRequest request) {
         var campaign = drafts.create(principal.getName(), request);
