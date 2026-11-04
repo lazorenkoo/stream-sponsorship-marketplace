@@ -47,6 +47,32 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Autowired CampaignTargetingService targetingService;
+
+    @Test
+    void targetingChangesVersionAndHistoryWhileBlockingStaleAndArchivedWrites() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "target-service@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("target-service@example.com", new CampaignDraftRequest("Draft", "Brief"));
+        var platforms = java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH,
+                com.streambid.platform.StreamingPlatform.KICK);
+        var saved = targetingService.replace("target-service@example.com", campaign.id(), new CampaignTargetingRequest(platforms, 0L));
+        assertThat(saved.version()).isEqualTo(1);
+        assertThat(saved.platforms()).containsExactly(com.streambid.platform.StreamingPlatform.TWITCH,
+                com.streambid.platform.StreamingPlatform.KICK);
+        assertThat(campaigns.findOwned(campaign.id(), owner).orElseThrow().title()).isEqualTo("Draft");
+        assertThat(events.findOwned(campaign.id(), owner, null, 100).getFirst().type()).isEqualTo(CampaignEventType.TARGETING_CHANGED);
+        assertThatThrownBy(() -> targetingService.replace("target-service@example.com", campaign.id(),
+                new CampaignTargetingRequest(java.util.Set.of(), 0L)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        drafts.archive("target-service@example.com", campaign.id(), new CampaignArchiveRequest(1L));
+        assertThatThrownBy(() -> targetingService.replace("target-service@example.com", campaign.id(),
+                new CampaignTargetingRequest(java.util.Set.of(), 2L)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEqualTo(platforms);
+    }
+
     @Autowired CampaignTargetingRepository targeting;
 
     @Test
