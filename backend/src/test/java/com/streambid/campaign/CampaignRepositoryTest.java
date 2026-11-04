@@ -47,6 +47,27 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Autowired CampaignEventRepository events;
+
+    @Test
+    void campaignEventsAreOwnedAndPagedByVersion() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "events-owner@example.com", "hash", "Owner"));
+        var now = Instant.parse("2026-11-04T20:30:00.123456789Z");
+        var campaign = new Campaign(UUID.randomUUID(), owner, "Draft", "", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(campaign);
+        var created = new CampaignEvent(campaign.id(), 0, owner, CampaignEventType.CREATED, now);
+        var edited = new CampaignEvent(campaign.id(), 1, owner, CampaignEventType.EDITED, now.plusSeconds(1));
+        events.append(created);
+        events.append(edited);
+        assertThat(events.findOwned(campaign.id(), owner, null, 1)).containsExactly(edited);
+        assertThat(events.findOwned(campaign.id(), owner, 1L, 100)).containsExactly(created);
+        assertThat(events.findOwned(campaign.id(), owner, 0L, 100)).isEmpty();
+        assertThat(events.findOwned(campaign.id(), UUID.randomUUID(), null, 100)).isEmpty();
+        assertThatThrownBy(() -> events.findOwned(campaign.id(), owner, null, 101)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> events.findOwned(campaign.id(), owner, -1L, 10)).isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void archiveApiPreservesReadableCampaignAndFiltersLists() throws Exception {
         UUID owner = UUID.randomUUID();
