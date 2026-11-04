@@ -125,6 +125,7 @@ class ChannelRepositoryTest {
                 new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
         var current = credentials.find(channel.id()).orElseThrow();
         assertThat(credentials.markValidated(old, old.lastValidatedAt().plusHours(1), old.expiresAt())).isFalse();
+        credentials.deleteIfUnchanged(old);
         assertThat(credentials.find(channel.id())).contains(current);
     }
     @Test

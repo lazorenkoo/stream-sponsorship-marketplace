@@ -5,6 +5,8 @@ import com.streambid.channel.ChannelCredentialsRepository;
 import com.streambid.channel.ChannelRepository;
 import com.streambid.channel.ConnectedChannel;
 import com.streambid.platform.StreamingPlatform;
+import com.streambid.platform.PlatformUnavailableException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.streambid.security.TokenCipher;
 import java.time.Clock;
 import java.time.Instant;
@@ -42,6 +44,64 @@ class TwitchValidationCycleTest {
         when(credentials.markValidated(any(), any(), any())).thenReturn(true);
     }
 
+    @Test
+    void missingCredentialsSkipNetwork() {
+        when(credentials.find(id)).thenReturn(Optional.empty());
+        assertThat(cycle.check(id)).isFalse();
+        verifyNoInteractions(validator, refresh, cipher);
+    }
+
+    @Test
+    void identityMismatchRemovesOnlyCheckedSnapshot() {
+        when(validator.validate("access", "verified-user")).thenThrow(new TwitchReauthorizationRequiredException());
+        assertThat(cycle.check(id)).isFalse();
+        verify(credentials).deleteIfUnchanged(snapshot);
+        verify(credentials, never()).markValidated(any(), any(), any());
+        verifyNoInteractions(refresh);
+    }
+
+    @Test
+    void temporaryValidationFailurePreservesCredentials() {
+        when(validator.validate("access", "verified-user")).thenThrow(new PlatformUnavailableException(
+                StreamingPlatform.TWITCH, new IllegalStateException("Temporary failure")));
+        assertThatThrownBy(() -> cycle.check(id)).isInstanceOf(PlatformUnavailableException.class);
+        verify(credentials, never()).deleteIfUnchanged(any());
+        verify(credentials, never()).markValidated(any(), any(), any());
+        verifyNoInteractions(refresh);
+    }
+
+    @Test
+    void secondRejectionStopsAfterOneRefreshAndRemovesRotatedSnapshot() {
+        var rotated = new ChannelCredentials(id, "rotated", "rotated-refresh", time.plusHours(1), time.minusHours(1));
+        when(credentials.find(id)).thenReturn(Optional.of(snapshot), Optional.of(rotated));
+        when(validator.validate("access", "verified-user")).thenThrow(new TwitchAccessTokenRejectedException());
+        when(cipher.decrypt("rotated", id + ":access")).thenReturn("new-access");
+        when(validator.validate("new-access", "verified-user")).thenThrow(new TwitchAccessTokenRejectedException());
+        assertThat(cycle.check(id)).isFalse();
+        verify(refresh, times(1)).refreshRejected(id, "access");
+        verify(credentials).deleteIfUnchanged(rotated);
+        verify(credentials, never()).deleteIfUnchanged(snapshot);
+    }
+
+    @Test
+    void temporaryFailureAfterRefreshKeepsRotatedTokens() {
+        var rotated = new ChannelCredentials(id, "rotated", "rotated-refresh", time.plusHours(1), time.minusHours(1));
+        when(credentials.find(id)).thenReturn(Optional.of(snapshot), Optional.of(rotated));
+        when(validator.validate("access", "verified-user")).thenThrow(new TwitchAccessTokenRejectedException());
+        when(cipher.decrypt("rotated", id + ":access")).thenReturn("new-access");
+        when(validator.validate("new-access", "verified-user")).thenThrow(new PlatformUnavailableException(
+                StreamingPlatform.TWITCH, new IllegalStateException("Temporary failure")));
+        assertThatThrownBy(() -> cycle.check(id)).isInstanceOf(PlatformUnavailableException.class);
+        verify(credentials, never()).deleteIfUnchanged(any());
+        verify(credentials, never()).markValidated(any(), any(), any());
+    }
+
+    @Test
+    void changedSnapshotIsNotReportedAsSuccessfullyValidated() {
+        when(credentials.markValidated(any(), any(), any())).thenReturn(false);
+        assertThat(cycle.check(id)).isFalse();
+        verify(credentials, never()).deleteIfUnchanged(any());
+    }
     @Test
     void recordsValidationOnlyForCurrentSnapshot() {
         assertThat(cycle.check(id)).isTrue();
