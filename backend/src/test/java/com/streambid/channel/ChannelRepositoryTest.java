@@ -112,6 +112,53 @@ class ChannelRepositoryTest {
         reset(exchange);
     }
 
+    @Autowired ChannelDisconnectService disconnectService;
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void disconnectWaitsForRefreshAndRemovesRotatedCredentials() throws Exception {
+        String email = "disconnect-refresh@example.com";
+        var channel = channelForRefresh(email);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var disconnectStarted = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        var rotated = new TwitchUserTokens("rotated-access", "rotated-refresh",
+                java.time.Instant.now().plusSeconds(3600));
+        when(exchange.refresh("old-refresh")).thenAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Refresh test timed out");
+            }
+            return rotated;
+        });
+        try {
+            var refreshing = executor.submit(() -> refreshService.refreshRejected(channel.id(), "old-access"));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            var disconnecting = executor.submit(() -> {
+                disconnectStarted.countDown();
+                disconnectService.disconnect(channel.id(), email);
+            });
+            assertThat(disconnectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> disconnecting.get(250, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            release.countDown();
+            assertThat(refreshing.get(5, TimeUnit.SECONDS)).isEqualTo(rotated);
+            disconnecting.get(5, TimeUnit.SECONDS);
+            assertThat(credentials.find(channel.id())).isEmpty();
+            assertThat(channels.find(channel.id())).isPresent();
+            assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "rotated-access"))
+                    .isInstanceOf(TwitchReauthorizationRequiredException.class);
+            verify(exchange, times(1)).refresh("old-refresh");
+            assertThat(credentials.find(channel.id())).isEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
+        }
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
