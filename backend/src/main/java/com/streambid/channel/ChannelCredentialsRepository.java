@@ -38,6 +38,11 @@ public class ChannelCredentialsRepository {
                 .where(CHANNEL_ID.eq(snapshot.channelId())).and(ACCESS.eq(snapshot.accessTokenCiphertext()))
                 .and(REFRESH.eq(snapshot.refreshTokenCiphertext())).execute() == 1;
     }
+    public void deleteIfUnchanged(ChannelCredentials snapshot) {
+        database.deleteFrom(DSL.table(DSL.name("channel_credentials")))
+                .where(CHANNEL_ID.eq(snapshot.channelId())).and(ACCESS.eq(snapshot.accessTokenCiphertext()))
+                .and(REFRESH.eq(snapshot.refreshTokenCiphertext())).execute();
+    }
     public Optional<ChannelCredentials> lock(UUID channelId) {
         return database.select(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
                 .from(DSL.table(DSL.name("channel_credentials"))).where(CHANNEL_ID.eq(channelId))
