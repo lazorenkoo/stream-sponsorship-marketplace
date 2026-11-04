@@ -47,6 +47,29 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void draftUpdatesRequireOwnerAndCurrentVersion() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "version-owner@example.com", "hash", "Owner"));
+        var now = Instant.parse("2026-11-04T18:39:00Z");
+        var original = new Campaign(UUID.randomUUID(), owner, "Original", "Brief", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(original);
+        var changed = new Campaign(original.id(), owner, "Changed", "New brief", CampaignStatus.DRAFT,
+                now, now.plusSeconds(1));
+        var saved = campaigns.updateDraft(changed, 0).orElseThrow();
+        assertThat(saved.version()).isEqualTo(1);
+        assertThat(saved.title()).isEqualTo("Changed");
+        assertThat(saved.createdAt()).isEqualTo(now);
+        assertThat(saved.updatedAt()).isEqualTo(now.plusSeconds(1));
+        assertThat(campaigns.updateDraft(original, 0)).isEmpty();
+        var foreign = new Campaign(original.id(), UUID.randomUUID(), "Stolen", "", CampaignStatus.DRAFT, now, now);
+        assertThat(campaigns.updateDraft(foreign, 1)).isEmpty();
+        assertThat(campaigns.findOwned(original.id(), owner)).contains(saved);
+        var clockBehind = campaigns.updateDraft(original, 1).orElseThrow();
+        assertThat(clockBehind.version()).isEqualTo(2);
+        assertThat(clockBehind.updatedAt()).isEqualTo(saved.updatedAt());
+    }
+
+    @Test
     void campaignListIsOwnedPagedAndValidatesCursor() throws Exception {
         UUID owner = UUID.randomUUID();
         UUID other = UUID.randomUUID();

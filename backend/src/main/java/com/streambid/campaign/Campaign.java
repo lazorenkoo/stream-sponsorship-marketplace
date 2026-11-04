@@ -6,7 +6,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record Campaign(UUID id, UUID advertiserId, String title, String description,
-        CampaignStatus status, Instant createdAt, Instant updatedAt) {
+        CampaignStatus status, Instant createdAt, Instant updatedAt, long version) {
+    public Campaign(UUID id, UUID advertiserId, String title, String description,
+            CampaignStatus status, Instant createdAt, Instant updatedAt) {
+        this(id, advertiserId, title, description, status, createdAt, updatedAt, 0);
+    }
     public Campaign {
         Objects.requireNonNull(id, "Campaign ID is required");
         Objects.requireNonNull(advertiserId, "Advertiser ID is required");
@@ -15,6 +19,9 @@ public record Campaign(UUID id, UUID advertiserId, String title, String descript
         Objects.requireNonNull(status, "Campaign status is required");
         Objects.requireNonNull(createdAt, "Creation time is required");
         Objects.requireNonNull(updatedAt, "Update time is required");
+        if (version < 0) {
+            throw new IllegalArgumentException("Campaign version must not be negative");
+        }
         title = title.strip();
         if (title.isBlank() || title.length() > 120 || title.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException("Title must contain 1 to 120 characters without control characters");
