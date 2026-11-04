@@ -27,10 +27,9 @@ public class ChannelMeasurementRepository {
     }
 
     public ChannelStatisticsSummary summarize(UUID channelId, UUID owner, Instant from, Instant to) {
-        if (from == null || to == null || !from.isBefore(to)
-                || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(31)) > 0) {
-            throw new IllegalArgumentException("Statistics range must be positive and at most 31 days");
-        }
+        var range = new MeasurementRange(from, to);
+        from = range.from();
+        to = range.to();
         var row = database.fetchOne("""
                 SELECT COUNT(*) AS total,
                        COUNT(*) FILTER (WHERE m.state = 'LIVE') AS live,

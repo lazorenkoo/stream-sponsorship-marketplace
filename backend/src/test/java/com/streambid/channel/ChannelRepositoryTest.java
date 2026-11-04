@@ -300,6 +300,29 @@ class ChannelRepositoryTest {
         assertThatThrownBy(() -> measurements.summarize(channel.id(), channel.userId(), from, from.plusSeconds(32 * 86400)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+    @Test
+    void summaryApiChecksOwnershipRangeAndEmptyMetrics() throws Exception {
+        var channel = channelForRefresh("summary-api@example.com");
+        String path = "/api/channels/" + channel.id() + "/statistics";
+        String from = "2026-11-04T13:31:00.123456789Z";
+        String to = "2026-11-04T14:31:00.123456789Z";
+        mvc.perform(get(path).with(user("summary-api@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalSamples").value(0))
+                .andExpect(jsonPath("$.averageViewers").doesNotExist()).andExpect(jsonPath("$.peakViewers").doesNotExist())
+                .andExpect(jsonPath("$.from").value("2026-11-04T13:31:00.123456Z"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"));
+        users.save(new UserAccount(UUID.randomUUID(), "summary-outsider@example.com", "hash", "Foreign"));
+        mvc.perform(get(path).with(user("summary-outsider@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(path).param("from", from).param("to", to)).andExpect(status().isUnauthorized());
+        for (String invalidTo : java.util.List.of(from, "invalid", "2026-12-10T00:00:00Z",
+                "2026-11-04T13:31:00.123456999Z")) {
+            mvc.perform(get(path).with(user("summary-api@example.com")).param("from", from).param("to", invalidTo))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path).with(user("summary-api@example.com"))).andExpect(status().isBadRequest());
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));

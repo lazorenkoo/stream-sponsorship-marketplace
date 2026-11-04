@@ -28,6 +28,22 @@ public class ChannelMeasurementController {
         this.measurements = measurements;
     }
 
+    @GetMapping("/api/channels/{channelId}/statistics")
+    public ResponseEntity<ChannelStatisticsSummary> summary(@PathVariable UUID channelId, Principal principal,
+            @RequestParam Instant from, @RequestParam Instant to) {
+        var user = users.findByEmail(principal.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        channels.find(channelId).filter(channel -> channel.userId().equals(user.id()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        MeasurementRange range;
+        try {
+            range = new MeasurementRange(from, to);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
+        }
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(measurements.summarize(channelId, user.id(), range.from(), range.to()));
+    }
     @GetMapping("/api/channels/{channelId}/measurements")
     public ResponseEntity<List<ChannelMeasurement>> history(@PathVariable UUID channelId, Principal principal,
             @RequestParam(defaultValue = "100") int limit, @RequestParam(required = false) Instant before) {
