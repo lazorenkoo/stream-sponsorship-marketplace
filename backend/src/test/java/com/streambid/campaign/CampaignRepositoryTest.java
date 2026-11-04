@@ -49,6 +49,60 @@ class CampaignRepositoryTest {
     @Autowired MockMvc mvc;
     @Test
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void archiveAndEditRaceHasOneWinnerAndOneHistoryEvent() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "archive-race@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("archive-race@example.com", new CampaignDraftRequest("Original", ""));
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var edit = executor.submit(() -> raceChange(barrier, () -> drafts.update("archive-race@example.com",
+                    campaign.id(), new CampaignDraftUpdateRequest("Edited", "", 0L))));
+            var archive = executor.submit(() -> raceChange(barrier, () -> drafts.archive("archive-race@example.com",
+                    campaign.id(), new CampaignArchiveRequest(0L))));
+            assertThat(java.util.List.of(edit.get(10, java.util.concurrent.TimeUnit.SECONDS),
+                    archive.get(10, java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder(200, 409);
+            var saved = campaigns.findOwned(campaign.id(), owner).orElseThrow();
+            var history = events.findOwned(campaign.id(), owner, null, 100);
+            assertThat(saved.version()).isEqualTo(1);
+            assertThat(history).hasSize(2);
+            assertThat(history.getFirst().campaignVersion()).isEqualTo(1);
+            assertThat(history.getLast().type()).isEqualTo(CampaignEventType.CREATED);
+            if (saved.status() == CampaignStatus.ARCHIVED) {
+                assertThat(history.getFirst().type()).isEqualTo(CampaignEventType.ARCHIVED);
+                assertThat(saved.title()).isEqualTo("Original");
+                assertThatThrownBy(() -> drafts.update("archive-race@example.com", campaign.id(),
+                        new CampaignDraftUpdateRequest("Blocked", "", 1L)))
+                        .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+            } else {
+                assertThat(saved.status()).isEqualTo(CampaignStatus.DRAFT);
+                assertThat(saved.title()).isEqualTo("Edited");
+                assertThat(history.getFirst().type()).isEqualTo(CampaignEventType.EDITED);
+            }
+            assertThat(events.findOwned(campaign.id(), owner, null, 100)).hasSize(2);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    private int raceChange(java.util.concurrent.CyclicBarrier barrier,
+            java.util.concurrent.Callable<Campaign> change) throws Exception {
+        barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        try {
+            change.call();
+            return 200;
+        } catch (org.springframework.web.server.ResponseStatusException exception) {
+            return exception.getStatusCode().value();
+        }
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void databaseRejectsInvalidCampaignsAndHistoryRows() {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, "schema-campaign@example.com", "hash", "Owner"));
