@@ -47,6 +47,67 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Autowired CampaignDraftService drafts;
+    @Autowired org.jooq.DSLContext database;
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void concurrentEditsHaveExactlyOneWinner() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "concurrent-edit@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var now = Instant.now();
+        var campaign = new Campaign(UUID.randomUUID(), owner, "Original", "", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(campaign);
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Callable<Integer> edit = () -> {
+                ready.countDown();
+                if (!start.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new AssertionError("Concurrent edit test timed out");
+                }
+                try {
+                    drafts.update("concurrent-edit@example.com", campaign.id(), new CampaignDraftUpdateRequest("Edited", "", 0L));
+                    return 200;
+                } catch (org.springframework.web.server.ResponseStatusException exception) {
+                    return exception.getStatusCode().value();
+                }
+            };
+            var first = executor.submit(edit);
+            var second = executor.submit(edit);
+            assertThat(ready.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(java.util.List.of(first.get(5, java.util.concurrent.TimeUnit.SECONDS),
+                    second.get(5, java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder(200, 409);
+            assertThat(campaigns.findOwned(campaign.id(), owner).orElseThrow().version()).isEqualTo(1);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    @Test
+    void updateRejectsMissingAndNegativeVersions() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "invalid-version@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var now = Instant.now();
+        var campaign = new Campaign(UUID.randomUUID(), owner, "Original", "", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(campaign);
+        for (Long version : new Long[] {null, -1L}) {
+            mvc.perform(put("/api/campaigns/" + campaign.id()).with(user("invalid-version@example.com")).with(csrf())
+                    .contentType("application/json").content(json.writeValueAsString(
+                            new CampaignDraftUpdateRequest("Edited", "", version))))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(campaigns.findOwned(campaign.id(), owner)).contains(campaign);
+    }
+
     @Test
     void updateApiRequiresCurrentVersionOwnerAndCsrf() throws Exception {
         UUID owner = UUID.randomUUID();
