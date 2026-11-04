@@ -27,6 +27,14 @@ public class CampaignRepository {
                 OffsetDateTime.ofInstant(campaign.updatedAt(), ZoneOffset.UTC), campaign.version());
     }
 
+    public Optional<Campaign> archiveOwned(UUID id, UUID advertiser, long expectedVersion, Instant archivedAt) {
+        return database.fetchOptional("""
+                UPDATE campaigns SET status = 'ARCHIVED',
+                    updated_at = GREATEST(updated_at, CAST(? AS timestamptz)), version = version + 1
+                WHERE id = ? AND advertiser_id = ? AND status = 'DRAFT' AND version = ?
+                RETURNING *
+                """, OffsetDateTime.ofInstant(archivedAt, ZoneOffset.UTC), id, advertiser, expectedVersion).map(this::map);
+    }
     public Optional<Campaign> updateDraft(Campaign draft, long expectedVersion) {
         return database.fetchOptional("""
                 UPDATE campaigns SET title = ?, description = ?,
@@ -42,6 +50,10 @@ public class CampaignRepository {
     }
 
     public List<Campaign> listOwned(UUID advertiser, Instant before, UUID beforeId, int limit) {
+        return listOwned(advertiser, before, beforeId, limit, null);
+    }
+
+    public List<Campaign> listOwned(UUID advertiser, Instant before, UUID beforeId, int limit, CampaignStatus status) {
         if (limit < 1 || limit > 100 || (before == null) != (beforeId == null)) {
             throw new IllegalArgumentException("Limit must be 1 to 100 and cursor requires both time and ID");
         }
@@ -49,9 +61,11 @@ public class CampaignRepository {
                 before.truncatedTo(java.time.temporal.ChronoUnit.MICROS), ZoneOffset.UTC);
         return database.fetch("""
                 SELECT * FROM campaigns WHERE advertiser_id = ?
+                  AND (CAST(? AS varchar) IS NULL OR status = ?)
                   AND (CAST(? AS timestamptz) IS NULL OR (created_at, id) < (CAST(? AS timestamptz), CAST(? AS uuid)))
                 ORDER BY created_at DESC, id DESC LIMIT ?
-                """, advertiser, time, time, beforeId, limit).map(this::map);
+                """, advertiser, status == null ? null : status.name(), status == null ? null : status.name(),
+                time, time, beforeId, limit).map(this::map);
     }
 
     private Campaign map(Record row) {

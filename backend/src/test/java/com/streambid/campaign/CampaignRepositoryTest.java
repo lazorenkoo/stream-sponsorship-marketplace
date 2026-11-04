@@ -47,6 +47,28 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Test
+    void archivingPreservesCampaignAndPreventsFurtherDraftEdits() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "archive-owner@example.com", "hash", "Owner"));
+        var now = Instant.parse("2026-11-04T19:52:00Z");
+        var draft = new Campaign(UUID.randomUUID(), owner, "Draft", "Brief", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(draft);
+        assertThat(campaigns.archiveOwned(draft.id(), UUID.randomUUID(), 0, now)).isEmpty();
+        assertThat(campaigns.archiveOwned(draft.id(), owner, 1, now)).isEmpty();
+        var archived = campaigns.archiveOwned(draft.id(), owner, 0, now.plusSeconds(10)).orElseThrow();
+        assertThat(archived.id()).isEqualTo(draft.id());
+        assertThat(archived.status()).isEqualTo(CampaignStatus.ARCHIVED);
+        assertThat(archived.version()).isEqualTo(1);
+        assertThat(archived.createdAt()).isEqualTo(draft.createdAt());
+        assertThat(campaigns.findOwned(draft.id(), owner)).contains(archived);
+        assertThat(campaigns.updateDraft(draft, 1)).isEmpty();
+        assertThat(campaigns.archiveOwned(draft.id(), owner, 1, now)).isEmpty();
+        assertThat(campaigns.listOwned(owner, null, null, 100, CampaignStatus.DRAFT)).isEmpty();
+        assertThat(campaigns.listOwned(owner, null, null, 100, CampaignStatus.ARCHIVED)).containsExactly(archived);
+        assertThat(campaigns.listOwned(owner, null, null, 100)).containsExactly(archived);
+    }
+
     @Autowired CampaignDraftService drafts;
     @Autowired org.jooq.DSLContext database;
 
