@@ -1,5 +1,14 @@
 package com.streambid.campaign;
 
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import com.streambid.user.UserRole;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+
 import com.streambid.user.UserAccount;
 import com.streambid.user.UserRepository;
 import java.time.Instant;
@@ -16,6 +25,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@AutoConfigureMockMvc
 @SpringBootTest
 @Testcontainers
 @Transactional
@@ -33,6 +43,46 @@ class CampaignRepositoryTest {
     @Autowired CampaignRepository campaigns;
     @Autowired UserRepository users;
 
+    @Autowired MockMvc mvc;
+
+    @Test
+    void advertiserCreatesOwnDraftAndCannotForgeServerFields() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "create@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(owner, UserRole.STREAMER);
+        mvc.perform(post("/api/campaigns")
+                .with(user("create@example.com"))
+                .with(csrf())
+                .contentType("application/json").content("""
+                        {"title":" New draft ","description":"Brief","advertiserId":"00000000-0000-0000-0000-000000000001","status":"PUBLISHED"}
+                        """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.advertiserId").value(owner.toString()))
+                .andExpect(jsonPath("$.status").value("DRAFT"));
+        assertThat(campaigns.listOwned(owner, null, null, 100)).hasSize(1);
+        assertThat(campaigns.listOwned(owner, null, null, 100).getFirst().title()).isEqualTo("New draft");
+    }
+
+    @Test
+    void draftCreationRequiresDatabaseAdvertiserRoleAndCsrf() throws Exception {
+        UUID streamer = UUID.randomUUID();
+        users.save(new UserAccount(streamer, "streamer@example.com", "hash", "Streamer"));
+        users.addRole(streamer, UserRole.STREAMER);
+        var request = post("/api/campaigns")
+                .contentType("application/json").content("{\"title\":\"Draft\",\"description\":\"\"}");
+        mvc.perform(request.with(user(
+                        "streamer@example.com").roles("ADVERTISER"))
+                .with(csrf()))
+                .andExpect(status().isForbidden());
+        assertThat(campaigns.listOwned(streamer, null, null, 100)).isEmpty();
+        mvc.perform(post("/api/campaigns")
+                .with(csrf()))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/campaigns")
+                .with(user("streamer@example.com")))
+                .andExpect(status().isForbidden());
+    }
     @Test
     void storesOwnedDraftsAndPagesEqualTimestampsWithoutDuplicates() {
         UUID owner = UUID.randomUUID();
