@@ -72,6 +72,22 @@ class ChannelStatisticsCollectorTest {
     }
 
     @Test
+    void mismatchedIdentityAndUnknownStatusCannotBecomeOffline() {
+        var collector = collector();
+        when(provider.getStreamStatus("opaque")).thenReturn(
+                new StreamStatus("different", StreamState.LIVE, 99L, now),
+                new StreamStatus("opaque", StreamState.UNKNOWN, null, now));
+        collector.collect(channel);
+        collector.collect(channel);
+        var captured = ArgumentCaptor.forClass(ChannelMeasurement.class);
+        verify(measurements, times(2)).saveIfConnected(captured.capture());
+        assertThat(captured.getAllValues()).allSatisfy(value -> {
+            assertThat(value.channelId()).isEqualTo(channel.id());
+            assertThat(value.state()).isEqualTo(StreamState.UNKNOWN);
+            assertThat(value.viewers()).isNull();
+        });
+    }
+    @Test
     void respectsDisconnectionBeforeSavingMeasurement() {
         var collector = collector();
         when(provider.getStreamStatus("opaque")).thenReturn(new StreamStatus("opaque", StreamState.LIVE, 3L, now));

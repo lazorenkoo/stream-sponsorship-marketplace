@@ -219,6 +219,22 @@ class ChannelRepositoryTest {
                     .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
         }
     }
+    @Test
+    void measurementNanosecondsRoundTripAtDatabasePrecision() {
+        var channel = channelForRefresh("precision@example.com");
+        var instant = java.time.Instant.parse("2026-11-04T11:33:00.123456789Z");
+        var measurement = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), instant,
+                com.streambid.platform.StreamState.LIVE, 0L);
+        assertThat(measurement.measuredAt()).isEqualTo(java.time.Instant.parse("2026-11-04T11:33:00.123456Z"));
+        assertThat(measurements.saveIfConnected(measurement)).isTrue();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).containsExactly(measurement);
+        var sameMicrosecond = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                instant.plusNanos(100), com.streambid.platform.StreamState.LIVE, 1L);
+        assertThat(measurements.saveIfConnected(sameMicrosecond)).isFalse();
+        assertThat(measurements.history(channel.id(), channel.userId(), instant, 10)).isEmpty();
+        assertThat(measurements.history(channel.id(), channel.userId(), measurement.measuredAt().plusNanos(1000), 10))
+                .containsExactly(measurement);
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));

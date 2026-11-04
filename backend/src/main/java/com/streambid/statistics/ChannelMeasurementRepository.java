@@ -30,7 +30,7 @@ public class ChannelMeasurementRepository {
         if (limit < 1 || limit > 200) {
             throw new IllegalArgumentException("History limit must be between 1 and 200");
         }
-        OffsetDateTime cursor = before == null ? null : OffsetDateTime.ofInstant(before, ZoneOffset.UTC);
+        OffsetDateTime cursor = before == null ? null : OffsetDateTime.ofInstant(before.truncatedTo(java.time.temporal.ChronoUnit.MICROS), ZoneOffset.UTC);
         return database.fetch("""
                 SELECT m.id, m.channel_id, m.measured_at, m.state, m.viewers
                 FROM channel_measurements m JOIN connected_channels c ON c.id = m.channel_id

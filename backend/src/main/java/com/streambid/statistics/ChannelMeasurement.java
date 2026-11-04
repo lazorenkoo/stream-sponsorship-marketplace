@@ -11,6 +11,7 @@ public record ChannelMeasurement(UUID id, UUID channelId, Instant measuredAt, St
         Objects.requireNonNull(channelId, "Channel ID is required");
         Objects.requireNonNull(measuredAt, "Measurement time is required");
         Objects.requireNonNull(state, "Stream state is required");
+        measuredAt = measuredAt.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         if (viewers != null && viewers < 0) {
             throw new IllegalArgumentException("Viewer count must not be negative");
         }
