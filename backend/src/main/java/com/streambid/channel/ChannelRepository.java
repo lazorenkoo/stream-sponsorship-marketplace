@@ -48,6 +48,15 @@ public class ChannelRepository {
                 .from(DSL.table(DSL.name("connected_channels"))).where(ID.eq(channelId))
                 .fetchOptionalInto(ConnectedChannel.class);
     }
+    public List<ChannelSummary> summariesByUser(UUID userId) {
+        var credentialId = DSL.field(DSL.name("channel_credentials", "channel_id"), UUID.class);
+        var validatedAt = DSL.field(DSL.name("channel_credentials", "last_validated_at"), OffsetDateTime.class);
+        return database.select(ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT, validatedAt,
+                        credentialId.isNull().as("authorization_required"))
+                .from(DSL.table(DSL.name("connected_channels")))
+                .leftJoin(DSL.table(DSL.name("channel_credentials"))).on(ID.eq(credentialId))
+                .where(USER_ID.eq(userId)).orderBy(PLATFORM, EXTERNAL_ID).fetchInto(ChannelSummary.class);
+    }
     public List<ConnectedChannel> findByUser(UUID userId) {
         return database.select(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
                 .from(DSL.table(DSL.name("connected_channels")))

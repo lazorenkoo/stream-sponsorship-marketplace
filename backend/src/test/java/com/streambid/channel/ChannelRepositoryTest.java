@@ -118,6 +118,22 @@ class ChannelRepositoryTest {
     }
 
     @Test
+    void ownChannelSummaryReportsRequiredAuthorizationWithoutCredentials() throws Exception {
+        var channel = channelForRefresh("summary@example.com");
+        var connected = mvc.perform(get("/api/channels").with(user("summary@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].authorizationRequired").value(false))
+                .andExpect(jsonPath("$[0].lastValidatedAt").isNotEmpty()).andReturn();
+        assertThat(connected.getResponse().getContentAsString())
+                .doesNotContain("old-access", "old-refresh", "accessTokenCiphertext", "refreshTokenCiphertext");
+        credentials.delete(channel.id());
+        mvc.perform(get("/api/channels").with(user("summary@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(channel.id().toString()))
+                .andExpect(jsonPath("$[0].authorizationRequired").value(true))
+                .andExpect(jsonPath("$[0].lastValidatedAt").doesNotExist());
+    }
+    @Test
     void validationSelectionHonorsCutoffAndKeysetCursor() {
         var channel = channelForRefresh("due@example.com");
         var saved = credentials.find(channel.id()).orElseThrow();

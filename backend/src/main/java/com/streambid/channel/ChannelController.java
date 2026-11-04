@@ -20,9 +20,9 @@ public class ChannelController {
     }
 
     @GetMapping("/api/channels")
-    public List<ConnectedChannel> myChannels(Principal principal) {
+    public List<ChannelSummary> myChannels(Principal principal) {
         var user = users.findByEmail(principal.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
-        return channels.findByUser(user.id());
+        return channels.summariesByUser(user.id());
     }
 }
