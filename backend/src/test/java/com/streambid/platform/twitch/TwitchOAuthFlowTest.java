@@ -122,6 +122,52 @@ class TwitchOAuthFlowTest {
     }
 
     @Autowired TwitchConnectionStore connectionStore;
+    @Autowired com.streambid.statistics.ChannelStatisticsCollector statisticsCollector;
+    @Autowired com.streambid.statistics.ChannelMeasurementRepository measurements;
+    @Autowired TwitchTokenService appTokens;
+
+    @Test
+    void collectorPersistsHelixStatesAndStopsAfterDisconnect() {
+        var owner = registration.register(new RegisterRequest(
+                "collector-flow@example.com", "strong-password", "Collector", UserRole.STREAMER));
+        var channel = connectionStore.save(owner.id(), new ChannelInfo("collector-channel", "Collector", null),
+                new TwitchUserTokens("user-access", "user-refresh", Instant.now().plusSeconds(3600)));
+        appTokens.invalidate("collector-app");
+        server.expect(requestTo("https://example.test/token")).andRespond(withSuccess("""
+                {"access_token":"collector-app","expires_in":3600,"token_type":"bearer"}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/streams?user_id=collector-channel"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.header(
+                        "Authorization", "Bearer collector-app"))
+                .andRespond(withSuccess("""
+                        {"data":[{"user_id":"collector-channel","type":"live","viewer_count":7}]}
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/streams?user_id=collector-channel"))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/users?id=collector-channel"))
+                .andRespond(withSuccess("""
+                        {"data":[{"id":"collector-channel","display_name":"Collector"}]}
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://example.test/helix/streams?user_id=collector-channel"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS)
+                        .header("Ratelimit-Reset", Long.toString(Instant.now().plusSeconds(60).getEpochSecond())));
+        assertThat(statisticsCollector.collect(channel)).isTrue();
+        assertThat(statisticsCollector.collect(channel)).isTrue();
+        assertThat(statisticsCollector.collect(channel)).isTrue();
+        var history = measurements.history(channel.id(), owner.id(), null, 10);
+        assertThat(history).hasSize(3);
+        assertThat(history).extracting(com.streambid.statistics.ChannelMeasurement::state)
+                .containsExactly(com.streambid.platform.StreamState.UNKNOWN,
+                        com.streambid.platform.StreamState.OFFLINE, com.streambid.platform.StreamState.LIVE);
+        assertThat(history.get(0).viewers()).isNull();
+        assertThat(history.get(1).viewers()).isNull();
+        assertThat(history.get(2).viewers()).isEqualTo(7);
+        credentials.delete(channel.id());
+        assertThat(statisticsCollector.collect(channel)).isFalse();
+        assertThat(measurements.history(channel.id(), owner.id(), null, 10)).hasSize(3);
+    }
+
 
     @Test
     void disconnectCancelsPendingAuthorizationInSameSession() throws Exception {
