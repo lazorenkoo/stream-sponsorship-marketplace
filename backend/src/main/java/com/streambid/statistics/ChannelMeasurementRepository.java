@@ -26,6 +26,28 @@ public class ChannelMeasurementRepository {
                 measurement.state().name(), measurement.viewers(), measurement.channelId()) == 1;
     }
 
+    public ChannelStatisticsSummary summarize(UUID channelId, UUID owner, Instant from, Instant to) {
+        if (from == null || to == null || !from.isBefore(to)
+                || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(31)) > 0) {
+            throw new IllegalArgumentException("Statistics range must be positive and at most 31 days");
+        }
+        var row = database.fetchOne("""
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE m.state = 'LIVE') AS live,
+                       COUNT(*) FILTER (WHERE m.state = 'OFFLINE') AS offline,
+                       COUNT(*) FILTER (WHERE m.state = 'UNKNOWN') AS unknown,
+                       COUNT(m.viewers) FILTER (WHERE m.state = 'LIVE') AS known,
+                       AVG(m.viewers) FILTER (WHERE m.state = 'LIVE') AS average,
+                       MAX(m.viewers) FILTER (WHERE m.state = 'LIVE') AS peak
+                FROM channel_measurements m JOIN connected_channels c ON c.id = m.channel_id
+                WHERE c.id = ? AND c.user_id = ?
+                  AND m.measured_at >= CAST(? AS timestamptz) AND m.measured_at < CAST(? AS timestamptz)
+                """, channelId, owner, OffsetDateTime.ofInstant(from, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(to, ZoneOffset.UTC));
+        return new ChannelStatisticsSummary(from, to, row.get("total", Long.class), row.get("live", Long.class),
+                row.get("offline", Long.class), row.get("unknown", Long.class), row.get("known", Long.class),
+                row.get("average", java.math.BigDecimal.class), row.get("peak", Long.class));
+    }
     public List<ChannelMeasurement> history(UUID channelId, UUID owner, Instant before, int limit) {
         if (limit < 1 || limit > 200) {
             throw new IllegalArgumentException("History limit must be between 1 and 200");

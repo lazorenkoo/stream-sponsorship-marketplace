@@ -267,6 +267,39 @@ class ChannelRepositoryTest {
         mvc.perform(get(path).with(user("history-api@example.com")).param("before", "invalid-time"))
                 .andExpect(status().isBadRequest());
     }
+    @Test
+    void statisticsSummaryCountsKnownViewersAndUsesExclusiveEnd() {
+        var channel = channelForRefresh("summary-range@example.com");
+        var from = java.time.Instant.parse("2026-11-04T13:10:00Z");
+        var states = new com.streambid.platform.StreamState[] {
+                com.streambid.platform.StreamState.LIVE, com.streambid.platform.StreamState.LIVE,
+                com.streambid.platform.StreamState.LIVE, com.streambid.platform.StreamState.OFFLINE,
+                com.streambid.platform.StreamState.UNKNOWN, com.streambid.platform.StreamState.LIVE};
+        Long[] viewers = {0L, 10L, null, null, null, 1000L};
+        for (int index = 0; index < states.length; index++) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    from.plusSeconds(index), states[index], viewers[index]));
+        }
+        var summary = measurements.summarize(channel.id(), channel.userId(), from, from.plusSeconds(5));
+        assertThat(summary.totalSamples()).isEqualTo(5);
+        assertThat(summary.liveSamples()).isEqualTo(3);
+        assertThat(summary.offlineSamples()).isEqualTo(1);
+        assertThat(summary.unknownSamples()).isEqualTo(1);
+        assertThat(summary.knownViewerSamples()).isEqualTo(2);
+        assertThat(summary.averageViewers()).isEqualByComparingTo("5");
+        assertThat(summary.peakViewers()).isEqualTo(10);
+        var unknown = measurements.summarize(channel.id(), channel.userId(), from.plusSeconds(3), from.plusSeconds(5));
+        assertThat(unknown.averageViewers()).isNull();
+        assertThat(unknown.peakViewers()).isNull();
+        var foreign = measurements.summarize(channel.id(), UUID.randomUUID(), from, from.plusSeconds(5));
+        assertThat(foreign.totalSamples()).isZero();
+        assertThat(foreign.averageViewers()).isNull();
+        assertThat(measurements.summarize(channel.id(), channel.userId(), from.minusSeconds(1), from).totalSamples()).isZero();
+        assertThatThrownBy(() -> measurements.summarize(channel.id(), channel.userId(), from, from))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> measurements.summarize(channel.id(), channel.userId(), from, from.plusSeconds(32 * 86400)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
