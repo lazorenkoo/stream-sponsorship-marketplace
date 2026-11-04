@@ -46,12 +46,12 @@ public class CampaignDraftService {
     }
 
     @Transactional(readOnly = true)
-    public java.util.List<Campaign> listOwned(String email, Instant before, UUID beforeId, int limit) {
+    public java.util.List<Campaign> listOwned(String email, Instant before, UUID beforeId, int limit, CampaignStatus status) {
         var user = requireAdvertiser(email);
         if (limit < 1 || limit > 100 || (before == null) != (beforeId == null)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Limit must be 1 to 100 and cursor requires time and ID");
         }
-        return campaigns.listOwned(user.id(), before, beforeId, limit);
+        return campaigns.listOwned(user.id(), before, beforeId, limit, status);
     }
     @Transactional
     public Campaign update(String email, UUID id, CampaignDraftUpdateRequest request) {
@@ -69,6 +69,13 @@ public class CampaignDraftService {
         }
         return campaigns.updateDraft(changed, request.expectedVersion())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Campaign has changed; reload before editing"));
+    }
+    @Transactional
+    public Campaign archive(String email, UUID id, CampaignArchiveRequest request) {
+        var user = requireAdvertiser(email);
+        campaigns.findOwned(id, user.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return campaigns.archiveOwned(id, user.id(), request.expectedVersion(), clock.instant())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Campaign has changed or is already archived"));
     }
     private com.streambid.user.UserAccount requireAdvertiser(String email) {
         var user = users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));

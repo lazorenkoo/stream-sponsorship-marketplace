@@ -48,6 +48,48 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void archiveApiPreservesReadableCampaignAndFiltersLists() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "archive-api@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "archive-foreign@example.com", "hash", "Other"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.ADVERTISER);
+        var now = Instant.now();
+        var campaign = new Campaign(UUID.randomUUID(), owner, "Draft", "Brief", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(campaign);
+        String path = "/api/campaigns/" + campaign.id();
+        String archive = path + "/archive";
+        String body = "{\"expectedVersion\":0}";
+        mvc.perform(post(archive).with(user("archive-foreign@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isNotFound());
+        mvc.perform(post(archive).with(user("archive-api@example.com"))
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(post(archive).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        for (String invalid : new String[] {"{}", "{\"expectedVersion\":-1}"}) {
+            mvc.perform(post(archive).with(user("archive-api@example.com")).with(csrf())
+                    .contentType("application/json").content(invalid)).andExpect(status().isBadRequest());
+        }
+        mvc.perform(post(archive).with(user("archive-api@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ARCHIVED")).andExpect(jsonPath("$.version").value(1))
+                .andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(get(path).with(user("archive-api@example.com"))).andExpect(status().isOk());
+        mvc.perform(get("/api/campaigns").with(user("archive-api@example.com")).param("status", "DRAFT"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/campaigns").with(user("archive-api@example.com")).param("status", "ARCHIVED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/campaigns").with(user("archive-api@example.com")).param("status", "INVALID"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post(archive).with(user("archive-api@example.com")).with(csrf())
+                .contentType("application/json").content("{\"expectedVersion\":1}")).andExpect(status().isConflict());
+        mvc.perform(put(path).with(user("archive-api@example.com")).with(csrf()).contentType("application/json")
+                .content(json.writeValueAsString(new CampaignDraftUpdateRequest("Changed", "", 1L))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void archivingPreservesCampaignAndPreventsFurtherDraftEdits() {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, "archive-owner@example.com", "hash", "Owner"));

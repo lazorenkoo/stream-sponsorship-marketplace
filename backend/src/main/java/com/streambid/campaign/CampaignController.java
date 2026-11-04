@@ -30,15 +30,22 @@ public class CampaignController {
     }
     @GetMapping("/api/campaigns")
     public ResponseEntity<List<Campaign>> list(Principal principal, @RequestParam(defaultValue = "20") int limit,
-            @RequestParam(required = false) Instant before, @RequestParam(required = false) UUID beforeId) {
+            @RequestParam(required = false) Instant before, @RequestParam(required = false) UUID beforeId,
+            @RequestParam(required = false) CampaignStatus status) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(drafts.listOwned(principal.getName(), before, beforeId, limit));
+                .body(drafts.listOwned(principal.getName(), before, beforeId, limit, status));
     }
     @PutMapping("/api/campaigns/{id}")
     public ResponseEntity<Campaign> update(@PathVariable UUID id, Principal principal,
             @Valid @RequestBody CampaignDraftUpdateRequest request) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .body(drafts.update(principal.getName(), id, request));
+    }
+    @PostMapping("/api/campaigns/{id}/archive")
+    public ResponseEntity<Campaign> archive(@PathVariable UUID id, Principal principal,
+            @Valid @RequestBody CampaignArchiveRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(drafts.archive(principal.getName(), id, request));
     }
     @PostMapping("/api/campaigns")
     public ResponseEntity<Campaign> create(Principal principal, @Valid @RequestBody CampaignDraftRequest request) {
