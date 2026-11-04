@@ -7,6 +7,8 @@ import com.streambid.channel.ChannelRepository;
 import com.streambid.channel.ChannelCredentialsRepository;
 import com.streambid.security.TokenCipher;
 import com.streambid.user.UserRole;
+import com.streambid.platform.ChannelInfo;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
@@ -119,6 +121,23 @@ class TwitchOAuthFlowTest {
         assertThat(channels.findByUser(owner.id())).isEmpty();
     }
 
+    @Autowired TwitchConnectionStore connectionStore;
+
+    @Test
+    void disconnectCancelsPendingAuthorizationInSameSession() throws Exception {
+        var owner = registration.register(new RegisterRequest(
+                "cancel@example.com", "strong-password", "Cancel", UserRole.STREAMER));
+        var channel = connectionStore.save(owner.id(), new ChannelInfo("cancel-channel", "Cancel", null),
+                new TwitchUserTokens("old-access", "old-refresh", Instant.now().plusSeconds(3600)));
+        var session = new MockHttpSession();
+        String state = states.begin(session, owner.id());
+        mvc.perform(delete("/api/channels/" + channel.id()).session(session).with(user(owner.email())).with(csrf()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/channels/connect/twitch/callback").session(session).with(user(owner.email()))
+                .param("state", state).param("code", "pending-code")).andExpect(status().isBadRequest());
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThat(channels.findByUser(owner.id())).hasSize(1);
+    }
     @Test
     void mismatchedIdentityDoesNotPersistChannelOrCredentials() throws Exception {
         var owner = registration.register(new RegisterRequest(

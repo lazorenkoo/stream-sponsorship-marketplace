@@ -43,6 +43,12 @@ public class ChannelRepository {
                 .execute();
     }
 
+    public Optional<ConnectedChannel> lockOwned(UUID channelId, UUID owner) {
+        return database.select(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
+                .from(DSL.table(DSL.name("connected_channels")))
+                .where(ID.eq(channelId)).and(USER_ID.eq(owner)).forUpdate()
+                .fetchOptionalInto(ConnectedChannel.class);
+    }
     public Optional<ConnectedChannel> find(UUID channelId) {
         return database.select(ID, USER_ID, PLATFORM, EXTERNAL_ID, NAME, VERIFIED_AT)
                 .from(DSL.table(DSL.name("connected_channels"))).where(ID.eq(channelId))

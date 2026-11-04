@@ -25,6 +25,13 @@ public class TwitchOAuthState {
         this.clock = twitchClock;
     }
 
+    public static void cancel(HttpSession session) {
+        if (session != null) {
+            synchronized (session) {
+                session.removeAttribute(SESSION_KEY);
+            }
+        }
+    }
     public String begin(HttpSession session, UUID userId) {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);

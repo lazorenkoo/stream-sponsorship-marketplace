@@ -7,6 +7,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.Base64;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import com.streambid.platform.PlatformUnavailableException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -117,6 +119,26 @@ class ChannelRepositoryTest {
                 new TwitchUserTokens("old-access", "old-refresh", java.time.Instant.now().plusSeconds(3600)));
     }
 
+    @Test
+    void disconnectIsOwnerOnlyCsrfProtectedAndIdempotent() throws Exception {
+        var channel = channelForRefresh("disconnect@example.com");
+        users.save(new UserAccount(UUID.randomUUID(), "foreign@example.com", "hash", "Foreign"));
+        String path = "/api/channels/" + channel.id();
+        mvc.perform(delete(path).with(user("foreign@example.com")).with(csrf()))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete(path).with(user("disconnect@example.com"))).andExpect(status().isForbidden());
+        mvc.perform(delete(path).with(csrf())).andExpect(status().isUnauthorized());
+        assertThat(credentials.find(channel.id())).isPresent();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(delete(path).with(user("disconnect@example.com")).with(csrf()))
+                    .andExpect(status().isNoContent());
+        }
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThat(channels.find(channel.id())).isPresent();
+        assertThat(credentials.dueForValidation(OffsetDateTime.now(ZoneOffset.UTC).plusHours(1), null, 50)).isEmpty();
+        mvc.perform(get("/api/channels").with(user("disconnect@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].authorizationRequired").value(true));
+    }
     @Test
     void ownChannelSummaryReportsRequiredAuthorizationWithoutCredentials() throws Exception {
         var channel = channelForRefresh("summary@example.com");
