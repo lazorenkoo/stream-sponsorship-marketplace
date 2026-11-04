@@ -47,6 +47,66 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Test
+    void targetingApiChecksOwnershipVersionCsrfAndPlatformInput() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "target-api@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "target-other@example.com", "hash", "Other"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.ADVERTISER);
+        var campaign = drafts.create("target-api@example.com", new CampaignDraftRequest("Draft", ""));
+        String path = "/api/campaigns/" + campaign.id() + "/targeting";
+        String body = "{\"platforms\":[\"KICK\",\"TWITCH\"],\"expectedVersion\":0}";
+        mvc.perform(get(path).with(user("target-api@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(0)).andExpect(jsonPath("$.platforms.length()").value(0));
+        mvc.perform(put(path).with(user("target-api@example.com")).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.platforms[0]").value("TWITCH")).andExpect(jsonPath("$.platforms[1]").value("KICK"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(get(path).with(user("target-api@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.platforms.length()").value(2));
+        mvc.perform(get(path).with(user("target-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(put(path).with(user("target-other@example.com")).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        mvc.perform(put(path).with(user("target-api@example.com")).contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        mvc.perform(put(path).with(user("target-api@example.com")).with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isConflict());
+        for (String invalid : new String[] {"{}", "{\"platforms\":[null],\"expectedVersion\":1}",
+                "{\"platforms\":[\"INVALID\"],\"expectedVersion\":1}", "{\"platforms\":[],\"expectedVersion\":-1}"}) {
+            mvc.perform(put(path).with(user("target-api@example.com")).with(csrf()).contentType("application/json").content(invalid))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void targetingEventFailureRestoresOldSelectionAndVersion() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "target-rollback@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("target-rollback@example.com", new CampaignDraftRequest("Draft", ""));
+        try {
+            targetingService.replace("target-rollback@example.com", campaign.id(), new CampaignTargetingRequest(
+                    java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+            var before = campaigns.findOwned(campaign.id(), owner).orElseThrow();
+            events.append(new CampaignEvent(campaign.id(), 2, owner, CampaignEventType.TARGETING_CHANGED, before.updatedAt()));
+            assertThatThrownBy(() -> targetingService.replace("target-rollback@example.com", campaign.id(),
+                    new CampaignTargetingRequest(java.util.Set.of(com.streambid.platform.StreamingPlatform.KICK), 1L)))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(campaigns.findOwned(campaign.id(), owner)).contains(before);
+            assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms())
+                    .containsExactly(com.streambid.platform.StreamingPlatform.TWITCH);
+        } finally {
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
     @Autowired CampaignTargetingService targetingService;
 
     @Test

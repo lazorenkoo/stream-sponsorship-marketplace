@@ -31,6 +31,13 @@ public class CampaignTargetingService {
         this.clock = clock;
     }
 
+    @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public CampaignTargetingView read(String email, UUID id) {
+        var campaign = drafts.findOwned(email, id);
+        var selection = targeting.readOwned(id, campaign.advertiserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return new CampaignTargetingView(id, campaign.version(), selection.platforms().stream().sorted().toList());
+    }
     @Transactional
     public CampaignTargetingView replace(String email, UUID id, CampaignTargetingRequest request) {
         var current = drafts.findOwned(email, id);
