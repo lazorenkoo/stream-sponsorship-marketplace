@@ -47,6 +47,34 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Autowired CampaignTargetingRepository targeting;
+
+    @Test
+    void targetPlatformsReplaceClearAndRespectReadOwnership() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "targeting-owner@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("targeting-owner@example.com", new CampaignDraftRequest("Draft", ""));
+        assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEmpty();
+        var selected = new CampaignTargeting(campaign.id(), java.util.Set.of(
+                com.streambid.platform.StreamingPlatform.TWITCH, com.streambid.platform.StreamingPlatform.KICK));
+        targeting.replaceInTransaction(selected);
+        assertThat(targeting.readOwned(campaign.id(), owner)).contains(selected);
+        assertThat(targeting.readOwned(campaign.id(), UUID.randomUUID())).isEmpty();
+        var replacement = new CampaignTargeting(campaign.id(), java.util.Set.of(com.streambid.platform.StreamingPlatform.YOUTUBE));
+        targeting.replaceInTransaction(replacement);
+        assertThat(targeting.readOwned(campaign.id(), owner)).contains(replacement);
+        targeting.replaceInTransaction(new CampaignTargeting(campaign.id(), java.util.Set.of()));
+        assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEmpty();
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void platformReplacementRequiresExistingTransaction() {
+        assertThatThrownBy(() -> targeting.replaceInTransaction(new CampaignTargeting(UUID.randomUUID(), java.util.Set.of())))
+                .isInstanceOf(org.springframework.transaction.IllegalTransactionStateException.class);
+    }
+
     @Test
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void archiveAndEditRaceHasOneWinnerAndOneHistoryEvent() throws Exception {
