@@ -118,6 +118,15 @@ class ChannelRepositoryTest {
     }
 
     @Test
+    void validationSelectionHonorsCutoffAndKeysetCursor() {
+        var channel = channelForRefresh("due@example.com");
+        var saved = credentials.find(channel.id()).orElseThrow();
+        assertThat(credentials.dueForValidation(saved.lastValidatedAt().plusSeconds(1), null, 50))
+                .containsExactly(channel.id());
+        assertThat(credentials.dueForValidation(saved.lastValidatedAt().minusSeconds(1), null, 50)).isEmpty();
+        assertThat(credentials.dueForValidation(saved.lastValidatedAt().plusSeconds(1), channel.id(), 50)).isEmpty();
+    }
+    @Test
     void staleValidationCannotOverwriteReconnectedCredentials() {
         var channel = channelForRefresh("validation@example.com");
         var old = credentials.find(channel.id()).orElseThrow();

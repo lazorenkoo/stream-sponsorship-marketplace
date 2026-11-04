@@ -2,6 +2,7 @@ package com.streambid.channel;
 
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.Field;
@@ -37,6 +38,14 @@ public class ChannelCredentialsRepository {
                 .set(VALIDATED, checkedAt).set(EXPIRES, expiresAt)
                 .where(CHANNEL_ID.eq(snapshot.channelId())).and(ACCESS.eq(snapshot.accessTokenCiphertext()))
                 .and(REFRESH.eq(snapshot.refreshTokenCiphertext())).execute() == 1;
+    }
+    public List<UUID> dueForValidation(OffsetDateTime cutoff, UUID after, int limit) {
+        return database.select(CHANNEL_ID).from(DSL.table(DSL.name("channel_credentials")))
+                .join(DSL.table(DSL.name("connected_channels")))
+                .on(CHANNEL_ID.eq(DSL.field(DSL.name("connected_channels", "id"), UUID.class)))
+                .where(DSL.field(DSL.name("connected_channels", "platform"), String.class).eq("TWITCH"))
+                .and(VALIDATED.le(cutoff)).and(after == null ? DSL.trueCondition() : CHANNEL_ID.gt(after))
+                .orderBy(CHANNEL_ID).limit(limit).fetch(CHANNEL_ID);
     }
     public void deleteIfUnchanged(ChannelCredentials snapshot) {
         database.deleteFrom(DSL.table(DSL.name("channel_credentials")))

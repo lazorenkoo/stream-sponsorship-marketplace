@@ -41,7 +41,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest(properties = {"twitch.enabled=true", "twitch.client-id=test-client", "twitch.client-secret=test-secret",
+@SpringBootTest(properties = {"twitch.enabled=true", "twitch.validation.enabled=false", "twitch.client-id=test-client", "twitch.client-secret=test-secret",
         "twitch.api-url=https://example.test/helix", "twitch.token-url=https://example.test/token",
         "twitch.validate-url=https://example.test/validate", "security.token-encryption-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="})
 @AutoConfigureMockMvc
