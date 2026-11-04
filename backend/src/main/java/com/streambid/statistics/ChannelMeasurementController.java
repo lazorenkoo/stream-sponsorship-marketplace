@@ -31,30 +31,43 @@ public class ChannelMeasurementController {
     @GetMapping("/api/channels/{channelId}/statistics")
     public ResponseEntity<ChannelStatisticsSummary> summary(@PathVariable UUID channelId, Principal principal,
             @RequestParam Instant from, @RequestParam Instant to) {
-        var user = users.findByEmail(principal.getName())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
-        channels.find(channelId).filter(channel -> channel.userId().equals(user.id()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        MeasurementRange range;
-        try {
-            range = new MeasurementRange(from, to);
-        } catch (IllegalArgumentException exception) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
-        }
+        UUID owner = requireOwner(channelId, principal);
+        var range = requireRange(from, to);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(measurements.summarize(channelId, user.id(), range.from(), range.to()));
+                .body(measurements.summarize(channelId, owner, range.from(), range.to()));
     }
     @GetMapping("/api/channels/{channelId}/measurements")
     public ResponseEntity<List<ChannelMeasurement>> history(@PathVariable UUID channelId, Principal principal,
             @RequestParam(defaultValue = "100") int limit, @RequestParam(required = false) Instant before) {
-        var user = users.findByEmail(principal.getName())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
-        channels.find(channelId).filter(channel -> channel.userId().equals(user.id()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        UUID owner = requireOwner(channelId, principal);
         if (limit < 1 || limit > 200) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Limit must be between 1 and 200");
         }
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(measurements.history(channelId, user.id(), before, limit));
+                .body(measurements.history(channelId, owner, before, limit));
+    }
+    @GetMapping("/api/channels/{channelId}/statistics/hourly")
+    public ResponseEntity<List<HourlyStatistics>> hourly(@PathVariable UUID channelId, Principal principal,
+            @RequestParam Instant from, @RequestParam Instant to) {
+        UUID owner = requireOwner(channelId, principal);
+        var range = requireRange(from, to);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(measurements.hourly(channelId, owner, range.from(), range.to()));
+    }
+
+    private UUID requireOwner(UUID channelId, Principal principal) {
+        var user = users.findByEmail(principal.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        channels.find(channelId).filter(channel -> channel.userId().equals(user.id()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return user.id();
+    }
+
+    private MeasurementRange requireRange(Instant from, Instant to) {
+        try {
+            return new MeasurementRange(from, to);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
+        }
     }
 }

@@ -351,6 +351,29 @@ class ChannelRepositoryTest {
         assertThat(measurements.hourly(channel.id(), UUID.randomUUID(), start, start.plusSeconds(10800))).isEmpty();
         assertThat(measurements.hourly(channel.id(), channel.userId(), start.minusSeconds(3600), start)).isEmpty();
     }
+    @Test
+    void hourlyApiRequiresOwnerAndReturnsUtcBuckets() throws Exception {
+        var channel = channelForRefresh("hourly-api@example.com");
+        var from = java.time.Instant.parse("2026-11-04T00:00:00Z");
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                from.plusSeconds(1), com.streambid.platform.StreamState.UNKNOWN, null));
+        String path = "/api/channels/" + channel.id() + "/statistics/hourly";
+        String to = from.plusSeconds(7200).toString();
+        mvc.perform(get(path).with(user("hourly-api@example.com")).param("from", from.toString()).param("to", to))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].hour").value(from.toString()))
+                .andExpect(jsonPath("$[0].unknownSamples").value(1))
+                .andExpect(jsonPath("$[0].averageViewers").doesNotExist())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"));
+        users.save(new UserAccount(UUID.randomUUID(), "hourly-foreign@example.com", "hash", "Foreign"));
+        mvc.perform(get(path).with(user("hourly-foreign@example.com")).param("from", from.toString()).param("to", to))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(path).param("from", from.toString()).param("to", to)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).with(user("hourly-api@example.com"))).andExpect(status().isBadRequest());
+        mvc.perform(get(path).with(user("hourly-api@example.com")).param("from", to).param("to", from.toString()))
+                .andExpect(status().isBadRequest());
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
