@@ -8,4 +8,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 @ConditionalOnProperty(name = "statistics.enabled", havingValue = "true")
 public class StatisticsConfiguration {
+    @org.springframework.context.annotation.Bean
+    @org.springframework.boot.context.properties.ConfigurationProperties("statistics")
+    public StatisticsProperties statisticsProperties() {
+        return new StatisticsProperties();
+    }
 }

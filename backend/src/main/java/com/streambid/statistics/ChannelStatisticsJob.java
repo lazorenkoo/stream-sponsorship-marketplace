@@ -21,7 +21,7 @@ public class ChannelStatisticsJob {
         this.collector = collector;
     }
 
-    @Scheduled(initialDelayString = "${statistics.interval-ms:60000}", fixedDelayString = "${statistics.interval-ms:60000}")
+    @Scheduled(initialDelayString = "#{@statisticsProperties.intervalMs}", fixedDelayString = "#{@statisticsProperties.intervalMs}")
     public synchronized void collectConnected() {
         UUID after = null;
         while (true) {
