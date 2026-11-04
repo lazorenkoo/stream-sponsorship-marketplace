@@ -235,6 +235,38 @@ class ChannelRepositoryTest {
         assertThat(measurements.history(channel.id(), channel.userId(), measurement.measuredAt().plusNanos(1000), 10))
                 .containsExactly(measurement);
     }
+    @Test
+    void measurementApiChecksOwnerAndPagesHistoricalData() throws Exception {
+        var channel = channelForRefresh("history-api@example.com");
+        users.save(new UserAccount(UUID.randomUUID(), "history-foreign@example.com", "hash", "Foreign"));
+        var now = java.time.Instant.parse("2026-11-04T12:20:00Z");
+        for (int index = 0; index < 2; index++) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    now.plusSeconds(index), com.streambid.platform.StreamState.LIVE, (long) index));
+        }
+        String path = "/api/channels/" + channel.id() + "/measurements";
+        credentials.delete(channel.id());
+        mvc.perform(get(path).with(user("history-api@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].viewers").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$[0].accessTokenCiphertext").doesNotExist())
+                .andExpect(jsonPath("$[0].userId").doesNotExist());
+        mvc.perform(get(path).with(user("history-api@example.com")).param("before", now.plusSeconds(1).toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].viewers").value(0));
+        mvc.perform(get(path).with(user("history-foreign@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/channels/" + UUID.randomUUID() + "/measurements")
+                .with(user("history-api@example.com"))).andExpect(status().isNotFound());
+        for (String invalid : java.util.List.of("0", "201", "text")) {
+            mvc.perform(get(path).with(user("history-api@example.com")).param("limit", invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path).with(user("history-api@example.com")).param("before", "invalid-time"))
+                .andExpect(status().isBadRequest());
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
