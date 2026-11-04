@@ -48,6 +48,37 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void databaseRejectsInvalidCampaignsAndHistoryRows() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "schema-campaign@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("schema-campaign@example.com", new CampaignDraftRequest("Valid", ""));
+        try {
+            for (String assignment : new String[] {"title = ' '", "status = 'INVALID'", "version = -1",
+                    "updated_at = created_at - INTERVAL '1 second'", "title = repeat('x', 121)",
+                    "description = repeat('x', 5001)"}) {
+                assertThatThrownBy(() -> database.execute("UPDATE campaigns SET " + assignment + " WHERE id = ?", campaign.id()))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            }
+            String insert = "INSERT INTO campaign_events (campaign_id, campaign_version, actor_id, event_type, occurred_at) "
+                    + "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)";
+            for (Object[] invalid : new Object[][] {{-1L, "EDITED"}, {1L, "INVALID"}, {0L, "CREATED"}}) {
+                assertThatThrownBy(() -> database.execute(insert, campaign.id(), invalid[0], owner, invalid[1]))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            }
+            assertThatThrownBy(() -> database.execute(insert, campaign.id(), 1L, UUID.randomUUID(), "EDITED"))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(campaigns.findOwned(campaign.id(), owner)).contains(campaign);
+            assertThat(events.findOwned(campaign.id(), owner, null, 100)).hasSize(1);
+        } finally {
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    @Test
     void historyApiIsOwnedPagedAndSkipsFailedEdits() throws Exception {
         UUID owner = UUID.randomUUID();
         UUID other = UUID.randomUUID();
