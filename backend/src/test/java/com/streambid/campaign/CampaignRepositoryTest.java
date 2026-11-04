@@ -47,6 +47,44 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Test
+    void serviceRecordsCompleteCampaignLifecycle() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "lifecycle@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var created = drafts.create("lifecycle@example.com", new CampaignDraftRequest("Draft", ""));
+        var edited = drafts.update("lifecycle@example.com", created.id(), new CampaignDraftUpdateRequest("Edited", "", 0L));
+        var archived = drafts.archive("lifecycle@example.com", created.id(), new CampaignArchiveRequest(1L));
+        var history = events.findOwned(created.id(), owner, null, 100);
+        assertThat(history).extracting(CampaignEvent::type)
+                .containsExactly(CampaignEventType.ARCHIVED, CampaignEventType.EDITED, CampaignEventType.CREATED);
+        assertThat(history).extracting(CampaignEvent::campaignVersion).containsExactly(2L, 1L, 0L);
+        assertThat(history).allSatisfy(event -> assertThat(event.actorId()).isEqualTo(owner));
+        assertThat(history.getFirst().occurredAt()).isEqualTo(archived.updatedAt());
+        assertThat(history.get(1).occurredAt()).isEqualTo(edited.updatedAt());
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void eventInsertFailureRollsBackCampaignEdit() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "event-rollback@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var created = drafts.create("event-rollback@example.com", new CampaignDraftRequest("Original", ""));
+        try {
+            events.append(new CampaignEvent(created.id(), 1, owner, CampaignEventType.EDITED, created.updatedAt()));
+            assertThatThrownBy(() -> drafts.update("event-rollback@example.com", created.id(),
+                    new CampaignDraftUpdateRequest("Must roll back", "", 0L)))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(campaigns.findOwned(created.id(), owner)).contains(created);
+            assertThat(events.findOwned(created.id(), owner, null, 100)).hasSize(2);
+        } finally {
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", created.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", created.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
     @Autowired CampaignEventRepository events;
 
     @Test
@@ -171,6 +209,7 @@ class CampaignRepositoryTest {
             start.countDown();
             executor.shutdownNow();
             assertThat(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
             database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
             database.execute("DELETE FROM users WHERE id = ?", owner);
         }

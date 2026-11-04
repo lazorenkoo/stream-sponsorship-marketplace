@@ -12,16 +12,18 @@ import org.springframework.web.server.ResponseStatusException;
 public class CampaignDraftService {
     private final CampaignRepository campaigns;
     private final UserRepository users;
+    private final CampaignEventRepository events;
     private final java.time.Clock clock;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public CampaignDraftService(CampaignRepository campaigns, UserRepository users) {
-        this(campaigns, users, java.time.Clock.systemUTC());
+    public CampaignDraftService(CampaignRepository campaigns, UserRepository users, CampaignEventRepository events) {
+        this(campaigns, users, events, java.time.Clock.systemUTC());
     }
 
-    CampaignDraftService(CampaignRepository campaigns, UserRepository users, java.time.Clock clock) {
+    CampaignDraftService(CampaignRepository campaigns, UserRepository users, CampaignEventRepository events, java.time.Clock clock) {
         this.campaigns = campaigns;
         this.users = users;
+        this.events = events;
         this.clock = clock;
     }
 
@@ -37,6 +39,7 @@ public class CampaignDraftService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
         }
         campaigns.insert(draft);
+        recordEvent(draft, CampaignEventType.CREATED);
         return draft;
     }
     @Transactional(readOnly = true)
@@ -67,16 +70,24 @@ public class CampaignDraftService {
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
         }
-        return campaigns.updateDraft(changed, request.expectedVersion())
+        var saved = campaigns.updateDraft(changed, request.expectedVersion())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Campaign has changed; reload before editing"));
+        recordEvent(saved, CampaignEventType.EDITED);
+        return saved;
     }
     @Transactional
     public Campaign archive(String email, UUID id, CampaignArchiveRequest request) {
         var user = requireAdvertiser(email);
         campaigns.findOwned(id, user.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        return campaigns.archiveOwned(id, user.id(), request.expectedVersion(), clock.instant())
+        var saved = campaigns.archiveOwned(id, user.id(), request.expectedVersion(), clock.instant())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Campaign has changed or is already archived"));
+        recordEvent(saved, CampaignEventType.ARCHIVED);
+        return saved;
     }
+    private void recordEvent(Campaign campaign, CampaignEventType type) {
+        events.append(new CampaignEvent(campaign.id(), campaign.version(), campaign.advertiserId(), type, campaign.updatedAt()));
+    }
+
     private com.streambid.user.UserAccount requireAdvertiser(String email) {
         var user = users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
         if (!users.findRoles(user.id()).contains("ADVERTISER")) {

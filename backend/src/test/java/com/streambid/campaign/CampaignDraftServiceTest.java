@@ -22,7 +22,7 @@ class CampaignDraftServiceTest {
         when(users.findByEmail(owner.email())).thenReturn(Optional.of(owner));
         when(users.findRoles(owner.id())).thenReturn(List.of("ADVERTISER"));
         var now = Instant.parse("2026-11-04T19:20:00Z");
-        var service = new CampaignDraftService(campaigns, users, Clock.fixed(now, ZoneOffset.UTC));
+        var service = new CampaignDraftService(campaigns, users, mock(CampaignEventRepository.class), Clock.fixed(now, ZoneOffset.UTC));
         var created = service.create(owner.email(), new CampaignDraftRequest("Draft", ""));
         assertThat(created.createdAt()).isEqualTo(now);
         var existing = new Campaign(created.id(), owner.id(), "Draft", "", CampaignStatus.DRAFT,
