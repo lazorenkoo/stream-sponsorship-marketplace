@@ -3,6 +3,9 @@ package com.streambid.campaign;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.UUID;
+import java.util.List;
+import java.time.Instant;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import java.security.Principal;
@@ -23,6 +26,12 @@ public class CampaignController {
     @GetMapping("/api/campaigns/{id}")
     public ResponseEntity<Campaign> find(@PathVariable UUID id, Principal principal) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(drafts.findOwned(principal.getName(), id));
+    }
+    @GetMapping("/api/campaigns")
+    public ResponseEntity<List<Campaign>> list(Principal principal, @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) Instant before, @RequestParam(required = false) UUID beforeId) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(drafts.listOwned(principal.getName(), before, beforeId, limit));
     }
     @PostMapping("/api/campaigns")
     public ResponseEntity<Campaign> create(Principal principal, @Valid @RequestBody CampaignDraftRequest request) {

@@ -46,6 +46,41 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Test
+    void campaignListIsOwnedPagedAndValidatesCursor() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "list-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "list-other@example.com", "hash", "Other"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.STREAMER);
+        var now = Instant.parse("2026-11-04T18:20:00Z");
+        var first = new Campaign(new UUID(0, 10), owner, "First", "", CampaignStatus.DRAFT, now, now);
+        var second = new Campaign(new UUID(0, 11), owner, "Second", "", CampaignStatus.DRAFT, now, now);
+        campaigns.insert(first);
+        campaigns.insert(second);
+        mvc.perform(get("/api/campaigns").with(user("list-owner@example.com")).param("limit", "1")
+                .param("advertiserId", other.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(second.id().toString())).andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(get("/api/campaigns").with(user("list-owner@example.com")).param("limit", "1")
+                .param("before", now.toString()).param("beforeId", second.id().toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(first.id().toString()));
+        for (String invalid : new String[] {"0", "101", "text"}) {
+            mvc.perform(get("/api/campaigns").with(user("list-owner@example.com")).param("limit", invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get("/api/campaigns").with(user("list-owner@example.com")).param("before", now.toString()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/campaigns").with(user("list-owner@example.com")).param("beforeId", "invalid"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/campaigns").with(user("list-other@example.com"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/campaigns")).andExpect(status().isUnauthorized());
+        users.addRole(other, UserRole.ADVERTISER);
+        mvc.perform(get("/api/campaigns").with(user("list-other@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+    }
+
     @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
 
     @Test

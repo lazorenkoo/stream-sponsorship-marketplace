@@ -38,6 +38,14 @@ public class CampaignDraftService {
         return campaigns.findOwned(id, user.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
+    @Transactional(readOnly = true)
+    public java.util.List<Campaign> listOwned(String email, Instant before, UUID beforeId, int limit) {
+        var user = requireAdvertiser(email);
+        if (limit < 1 || limit > 100 || (before == null) != (beforeId == null)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Limit must be 1 to 100 and cursor requires time and ID");
+        }
+        return campaigns.listOwned(user.id(), before, beforeId, limit);
+    }
     private com.streambid.user.UserAccount requireAdvertiser(String email) {
         var user = users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
         if (!users.findRoles(user.id()).contains("ADVERTISER")) {
