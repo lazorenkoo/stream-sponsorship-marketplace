@@ -159,6 +159,32 @@ class ChannelRepositoryTest {
                     .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
         }
     }
+    @Autowired com.streambid.statistics.ChannelMeasurementRepository measurements;
+
+    @Test
+    void measurementHistoryIsOwnedPagedAndPreservedAfterDisconnect() {
+        var channel = channelForRefresh("measurements@example.com");
+        var now = java.time.Instant.parse("2026-11-04T10:15:00Z");
+        var first = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), now,
+                com.streambid.platform.StreamState.LIVE, 42L);
+        var second = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), now.plusSeconds(60),
+                com.streambid.platform.StreamState.UNKNOWN, null);
+        assertThat(measurements.saveIfConnected(first)).isTrue();
+        assertThat(measurements.saveIfConnected(first)).isFalse();
+        assertThat(measurements.saveIfConnected(second)).isTrue();
+        assertThat(measurements.history(channel.id(), UUID.randomUUID(), null, 10)).isEmpty();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 1)).containsExactly(second);
+        assertThat(measurements.history(channel.id(), channel.userId(), second.measuredAt(), 10)).containsExactly(first);
+        credentials.delete(channel.id());
+        var afterDisconnect = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                now.plusSeconds(120), com.streambid.platform.StreamState.LIVE, 10L);
+        assertThat(measurements.saveIfConnected(afterDisconnect)).isFalse();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).containsExactly(second, first);
+        assertThatThrownBy(() -> measurements.history(channel.id(), channel.userId(), null, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> measurements.history(channel.id(), channel.userId(), null, 201))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
