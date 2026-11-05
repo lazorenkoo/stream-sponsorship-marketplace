@@ -432,6 +432,30 @@ class ChannelRepositoryTest {
         assertThat(listings.setOwned(channel.id(), channel.userId(), false).orElseThrow().listed()).isFalse();
         assertThat(channels.find(channel.id())).isPresent();
     }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void listingSchemaRejectsDuplicatesOrphansAndNullVisibility() {
+        var channel = channelForRefresh("listing-constraints@example.com");
+        try {
+            database.execute("INSERT INTO channel_listings (channel_id, listed) VALUES (?, TRUE)", channel.id());
+            assertThatThrownBy(() -> database.execute(
+                    "INSERT INTO channel_listings (channel_id, listed) VALUES (?, FALSE)", channel.id()))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThatThrownBy(() -> database.execute(
+                    "INSERT INTO channel_listings (channel_id, listed) VALUES (?, TRUE)", UUID.randomUUID()))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThatThrownBy(() -> database.execute(
+                    "INSERT INTO channel_listings (channel_id, listed) VALUES (?, NULL)", channel.id()))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isTrue();
+        } finally {
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id = ?", channel.userId());
+        }
+    }
     @Test
     void listingApiIsOwnerOnlyAndDisconnectClearsVisibility() throws Exception {
         var channel = channelForRefresh("listing-api@example.com");
