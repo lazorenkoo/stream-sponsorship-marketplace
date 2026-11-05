@@ -635,6 +635,8 @@ class ChannelRepositoryTest {
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
                         .param("expectedVersion", "1"))
                 .andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString()))
+                .andExpect(status().isBadRequest());
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("expectedVersion", "-1"))
                 .andExpect(status().isBadRequest());
         listings.setOwned(visible.id(), visible.userId(), false).orElseThrow();

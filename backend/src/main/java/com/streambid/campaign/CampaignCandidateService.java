@@ -33,6 +33,9 @@ public class CampaignCandidateService {
         if (expectedVersion != null && expectedVersion < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expected campaign version cannot be negative");
         }
+        if (after != null && expectedVersion == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Continuation cursor requires an expected version");
+        }
         if (expectedVersion != null && expectedVersion != campaign.version()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Campaign changed; restart candidate preview");
         }
