@@ -556,6 +556,7 @@ class ChannelRepositoryTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0));
     }
     @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
+    @Autowired com.streambid.campaign.ParticipationEventRepository participationEvents;
     @Autowired com.streambid.campaign.CampaignParticipationService participationService;
 
     @Test
@@ -626,6 +627,14 @@ class ChannelRepositoryTest {
                 channel.userId(), com.streambid.campaign.ParticipationDirection.APPLICATION,
                 com.streambid.campaign.ParticipationStatus.PENDING, 0, now, now);
         var saved = participations.create(request).orElseThrow();
+        participationEvents.append(saved, channel.userId());
+        assertThat(participationEvents.findForActor(saved.id(), owner, null, 20)).hasSize(1);
+        assertThat(participationEvents.findForActor(saved.id(), channel.userId(), null, 20).getFirst().actorId())
+                .isEqualTo(channel.userId());
+        assertThat(participationEvents.findForActor(saved.id(), UUID.randomUUID(), null, 20)).isEmpty();
+        assertThat(participationEvents.findForActor(saved.id(), owner, 0L, 20)).isEmpty();
+        assertThatThrownBy(() -> participationEvents.findForActor(saved.id(), owner, null, 101))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThat(participations.create(request)).isEmpty();
         assertThat(participations.findForActor(saved.id(), owner)).contains(saved);
         assertThat(participations.findForActor(saved.id(), channel.userId())).contains(saved);
