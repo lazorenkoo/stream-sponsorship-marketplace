@@ -796,6 +796,7 @@ class ChannelRepositoryTest {
     @Test
     void staleValidationCannotOverwriteReconnectedCredentials() {
         var channel = channelForRefresh("validation@example.com");
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
         var old = credentials.find(channel.id()).orElseThrow();
         store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "New name", null),
                 new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
@@ -803,6 +804,9 @@ class ChannelRepositoryTest {
         assertThat(credentials.markValidated(old, old.lastValidatedAt().plusHours(1), old.expiresAt())).isFalse();
         credentials.deleteIfUnchanged(old);
         assertThat(credentials.find(channel.id())).contains(current);
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isTrue();
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).contains(channel.id());
     }
     @Test
     void temporaryRefreshFailurePreservesStoredCredentials() {
