@@ -538,6 +538,58 @@ class ChannelRepositoryTest {
     }
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
     @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
+    @Autowired com.streambid.campaign.CampaignParticipationService participationService;
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void concurrentAcceptanceAndWithdrawalHaveOneWinner() throws Exception {
+        String email = "participation-race-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var channel = channelForRefresh("participation-race-streamer@example.com");
+        var draft = campaignDrafts.create(email, new com.streambid.campaign.CampaignDraftRequest("Campaign", "Brief"));
+        campaignTargets.replace(email, draft.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        campaignDrafts.publish(email, draft.id(), new com.streambid.campaign.CampaignPublishRequest(1L));
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var request = participationService.create("participation-race-streamer@example.com", draft.id(), channel.id(),
+                    com.streambid.campaign.ParticipationDirection.APPLICATION);
+            var accept = executor.submit(() -> raceParticipation(barrier, email, request.id(),
+                    com.streambid.campaign.ParticipationAction.ACCEPT));
+            var withdraw = executor.submit(() -> raceParticipation(barrier, "participation-race-streamer@example.com", request.id(),
+                    com.streambid.campaign.ParticipationAction.WITHDRAW));
+            assertThat(java.util.List.of(accept.get(10, TimeUnit.SECONDS), withdraw.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+            var saved = participationService.find(email, request.id());
+            assertThat(saved.version()).isEqualTo(1);
+            assertThat(saved.status()).isIn(com.streambid.campaign.ParticipationStatus.ACCEPTED,
+                    com.streambid.campaign.ParticipationStatus.WITHDRAWN);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM campaign_participations WHERE campaign_id = ?", draft.id());
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", draft.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", draft.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", draft.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id IN (?, ?)", owner, channel.userId());
+        }
+    }
+
+    private int raceParticipation(java.util.concurrent.CyclicBarrier barrier, String email, UUID id,
+            com.streambid.campaign.ParticipationAction action) throws Exception {
+        barrier.await(5, TimeUnit.SECONDS);
+        try {
+            participationService.decide(email, id, new com.streambid.campaign.ParticipationDecisionRequest(action, 0L));
+            return 200;
+        } catch (ResponseStatusException exception) {
+            return exception.getStatusCode().value();
+        }
+    }
 
     @Test
     void campaignApplicationsAreUniqueAndVisibleOnlyToBothParties() throws Exception {
@@ -581,6 +633,11 @@ class ChannelRepositoryTest {
         var applicant = channelForRefresh("http-applicant@example.com");
         String body = "{\"channelId\":\"" + applicant.id() + "\"}";
         String path = "/api/campaigns/" + draft.id();
+        var ownChannel = store.save(owner, new ChannelInfo("self-participation", "Own channel", null),
+                new TwitchUserTokens("self-access", "self-refresh", now.plusSeconds(3600)));
+        mvc.perform(post(path + "/applications").with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content("{\"channelId\":\"" + ownChannel.id() + "\"}"))
+                .andExpect(status().isConflict());
         mvc.perform(post(path + "/applications").with(user("http-applicant@example.com")).with(csrf())
                 .contentType("application/json").content(body)).andExpect(status().isCreated())
                 .andExpect(jsonPath("$.direction").value("APPLICATION")).andExpect(jsonPath("$.status").value("PENDING"));

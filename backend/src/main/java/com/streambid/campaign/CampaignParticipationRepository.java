@@ -27,6 +27,7 @@ public class CampaignParticipationRepository {
                 JOIN channel_credentials t ON t.channel_id = ch.id
                 JOIN campaign_target_platforms p ON p.campaign_id = c.id AND p.platform = ch.platform
                 WHERE c.id = ? AND c.status = 'PUBLISHED'
+                  AND c.advertiser_id <> ch.user_id
                   AND ((? = 'APPLICATION' AND ch.user_id = ?)
                     OR (? = 'INVITATION' AND c.advertiser_id = ? AND EXISTS
                         (SELECT 1 FROM channel_listings l WHERE l.channel_id = ch.id AND l.listed)))
