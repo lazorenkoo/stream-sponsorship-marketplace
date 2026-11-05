@@ -618,6 +618,9 @@ class ChannelRepositoryTest {
                 .andExpect(status().isBadRequest());
         campaignDrafts.archive("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignArchiveRequest(1L));
         mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-owner@example.com")).param("after", visible.id().toString())
+                        .param("expectedVersion", "1"))
+                .andExpect(status().isConflict());
     }
 
     @Test
@@ -649,6 +652,8 @@ class ChannelRepositoryTest {
                 new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.YOUTUBE), 1L));
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
                         .param("expectedVersion", "1"))
+                .andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("expectedVersion", "1"))
                 .andExpect(status().isConflict());
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString()))
                 .andExpect(status().isBadRequest());
