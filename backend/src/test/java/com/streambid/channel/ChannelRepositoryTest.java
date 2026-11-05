@@ -608,6 +608,8 @@ class ChannelRepositoryTest {
                 "accessToken", "refreshToken", "old-access", "old-refresh");
         mvc.perform(get(path).with(user("preview-other@example.com"))).andExpect(status().isNotFound());
         mvc.perform(get(path).with(user("preview-visible@example.com"))).andExpect(status().isForbidden());
+        mvc.perform(get(path).with(user("preview-visible@example.com").roles("ADVERTISER")))
+                .andExpect(status().isForbidden());
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
         for (String invalid : new String[] {"0", "101", "text"}) {
             mvc.perform(get(path).with(user("preview-owner@example.com")).param("limit", invalid)).andExpect(status().isBadRequest());
