@@ -30,11 +30,15 @@ class CampaignCandidateTest {
         var preview = new CampaignCandidatePreview(campaignId, 0, mutable, null, false);
         mutable.clear();
         assertThat(preview.candidates()).containsExactly(candidate);
+        assertThat(new CampaignCandidatePreview(campaignId, 0, java.util.List.of(candidate), candidate.channelId(), true)
+                .nextCursor()).isEqualTo(candidate.channelId());
         assertThatThrownBy(() -> new CampaignCandidatePreview(null, 0, java.util.List.of(), null, false))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, -1, java.util.List.of(), null, false))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, 0, java.util.List.of(), null, true))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, 0, java.util.List.of(candidate),
+                UUID.randomUUID(), true)).isInstanceOf(IllegalArgumentException.class);
     }
 }

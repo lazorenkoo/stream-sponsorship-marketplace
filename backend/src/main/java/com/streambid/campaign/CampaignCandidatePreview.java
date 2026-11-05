@@ -15,5 +15,8 @@ public record CampaignCandidatePreview(UUID campaignId, long campaignVersion, Li
         if (hasMore != (nextCursor != null)) {
             throw new IllegalArgumentException("A next cursor is required when more candidates exist");
         }
+        if (hasMore && !nextCursor.equals(candidates.getLast().channelId())) {
+            throw new IllegalArgumentException("Next cursor must match the last candidate in the page");
+        }
     }
 }
