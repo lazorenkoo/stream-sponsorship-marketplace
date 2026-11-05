@@ -17,6 +17,7 @@ public class CampaignParticipationRepository {
         this.database = database;
     }
 
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public Optional<CampaignParticipation> create(CampaignParticipation request) {
         return database.fetchOptional("""
                 INSERT INTO campaign_participations

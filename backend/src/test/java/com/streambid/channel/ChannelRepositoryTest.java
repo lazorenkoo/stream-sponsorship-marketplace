@@ -1,4 +1,5 @@
 package com.streambid.channel;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 import com.streambid.platform.StreamingPlatform;
 import com.streambid.user.UserAccount;
@@ -539,7 +540,7 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
 
     @Test
-    void campaignApplicationsAreUniqueAndVisibleOnlyToBothParties() {
+    void campaignApplicationsAreUniqueAndVisibleOnlyToBothParties() throws Exception {
         var channel = channelForRefresh("applicant@example.com");
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, "application-advertiser@example.com", "hash", "Advertiser"));
@@ -562,6 +563,21 @@ class ChannelRepositoryTest {
         assertThat(participations.listForActor(owner, null, 20)).containsExactly(saved);
         assertThat(participations.listForActor(owner, saved.id(), 20)).isEmpty();
         assertThat(participations.listForActor(UUID.randomUUID(), null, 20)).isEmpty();
+        var applicant = channelForRefresh("http-applicant@example.com");
+        String body = "{\"channelId\":\"" + applicant.id() + "\"}";
+        String path = "/api/campaigns/" + draft.id();
+        mvc.perform(post(path + "/applications").with(user("http-applicant@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.direction").value("APPLICATION")).andExpect(jsonPath("$.status").value("PENDING"));
+        mvc.perform(post(path + "/applications").with(user("http-applicant@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isConflict());
+        mvc.perform(post(path + "/invitations").with(user("http-applicant@example.com").roles("ADVERTISER")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        var invited = channelForRefresh("http-invited@example.com");
+        listings.setOwned(invited.id(), invited.userId(), true).orElseThrow();
+        mvc.perform(post(path + "/invitations").with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content("{\"channelId\":\"" + invited.id() + "\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.direction").value("INVITATION"));
     }
 
     @Test
