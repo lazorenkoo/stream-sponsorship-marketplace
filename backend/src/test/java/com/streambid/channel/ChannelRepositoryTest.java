@@ -538,6 +538,15 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
 
     @Test
+    void databaseReadinessRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/health/ready")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/health/ready").with(user("readiness@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"));
+    }
+
+    @Test
     void reconnectAfterCredentialRevocationRequiresNewListingConsent() {
         var channel = channelForRefresh("revoked-listing@example.com");
         listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
