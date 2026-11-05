@@ -563,6 +563,21 @@ class ChannelRepositoryTest {
         assertThat(participations.listForActor(owner, null, 20)).containsExactly(saved);
         assertThat(participations.listForActor(owner, saved.id(), 20)).isEmpty();
         assertThat(participations.listForActor(UUID.randomUUID(), null, 20)).isEmpty();
+        String detail = "/api/participations/" + saved.id();
+        mvc.perform(get(detail).with(user("applicant@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(saved.id().toString()));
+        mvc.perform(get(detail).with(user("application-advertiser@example.com"))).andExpect(status().isOk());
+        mvc.perform(get(detail)).andExpect(status().isUnauthorized());
+        var stranger = channelForRefresh("participation-stranger@example.com");
+        mvc.perform(get(detail).with(user("participation-stranger@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/participations").with(user("participation-stranger@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("after", saved.id().toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("limit", "101"))
+                .andExpect(status().isBadRequest());
         var applicant = channelForRefresh("http-applicant@example.com");
         String body = "{\"channelId\":\"" + applicant.id() + "\"}";
         String path = "/api/campaigns/" + draft.id();

@@ -4,6 +4,7 @@ import com.streambid.channel.ChannelRepository;
 import com.streambid.user.UserRepository;
 import java.time.Clock;
 import java.util.UUID;
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,5 +47,23 @@ public class CampaignParticipationService {
                 ParticipationStatus.PENDING, 0, now, now);
         return requests.create(request).orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
                 "Channel is ineligible or already has a request for this campaign"));
+    }
+    @Transactional(readOnly = true)
+    public CampaignParticipation find(String email, UUID id) {
+        return requests.findForActor(id, actorId(email))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    @Transactional(readOnly = true)
+    public List<CampaignParticipation> list(String email, UUID after, int limit) {
+        UUID actor = actorId(email);
+        if (limit < 1 || limit > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Participation limit must be between 1 and 100");
+        }
+        return requests.listForActor(actor, after, limit);
+    }
+
+    private UUID actorId(String email) {
+        return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
     }
 }
