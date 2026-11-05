@@ -92,9 +92,10 @@ class ChannelRepositoryTest {
                     new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), exchange);
         }
         @Bean
-        TwitchConnectionStore store(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users) {
+        TwitchConnectionStore store(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users,
+                ChannelListingRepository listings) {
             return new TwitchConnectionStore(channels, credentials, users,
-                    new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), Clock.systemUTC());
+                    new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), Clock.systemUTC(), listings);
         }
     }
 
@@ -535,6 +536,18 @@ class ChannelRepositoryTest {
         }
     }
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
+
+    @Test
+    void reconnectAfterCredentialRevocationRequiresNewListingConsent() {
+        var channel = channelForRefresh("revoked-listing@example.com");
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        credentials.delete(channel.id());
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).doesNotContain(channel.id());
+    }
 
     @Test
     void candidateSelectionRequiresListingCredentialsAndSelectedPlatform() {
