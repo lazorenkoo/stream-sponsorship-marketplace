@@ -560,6 +560,44 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.campaign.CampaignParticipationService participationService;
 
     @Test
+    void revokedAuthorizationAndArchivedCampaignBlockAcceptanceButAllowWithdrawal() throws Exception {
+        String email = "closed-campaign-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var channel = channelForRefresh("closed-campaign-streamer@example.com");
+        channelForRefresh("closed-campaign-stranger@example.com");
+        var draft = campaignDrafts.create(email, new com.streambid.campaign.CampaignDraftRequest("Campaign", "Brief"));
+        campaignTargets.replace(email, draft.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        campaignDrafts.publish(email, draft.id(), new com.streambid.campaign.CampaignPublishRequest(1L));
+        var request = participationService.create("closed-campaign-streamer@example.com", draft.id(), channel.id(),
+                com.streambid.campaign.ParticipationDirection.APPLICATION);
+        String path = "/api/participations/" + request.id() + "/decision";
+        String accept = "{\"action\":\"ACCEPT\",\"expectedVersion\":0}";
+        mvc.perform(post(path).with(user(email)).contentType("application/json").content(accept))
+                .andExpect(status().isForbidden());
+        mvc.perform(post(path).with(user("closed-campaign-stranger@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isNotFound());
+        credentials.delete(channel.id());
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json").content(accept))
+                .andExpect(status().isConflict());
+        assertThat(participationService.find(email, request.id())).isEqualTo(request);
+        assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(1);
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        campaignDrafts.archive(email, draft.id(), new com.streambid.campaign.CampaignArchiveRequest(2L));
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json").content(accept))
+                .andExpect(status().isConflict());
+        assertThat(participationService.find(email, request.id())).isEqualTo(request);
+        mvc.perform(post(path).with(user("closed-campaign-streamer@example.com")).with(csrf())
+                .contentType("application/json").content("{\"action\":\"WITHDRAW\",\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("WITHDRAWN"))
+                .andExpect(jsonPath("$.version").value(1));
+        assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(2);
+    }
+
+    @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void concurrentAcceptanceAndWithdrawalHaveOneWinner() throws Exception {
         String email = "participation-race-owner@example.com";
