@@ -536,6 +536,33 @@ class ChannelRepositoryTest {
         }
     }
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
+    @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
+
+    @Test
+    void campaignApplicationsAreUniqueAndVisibleOnlyToBothParties() {
+        var channel = channelForRefresh("applicant@example.com");
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "application-advertiser@example.com", "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var draft = campaignDrafts.create("application-advertiser@example.com",
+                new com.streambid.campaign.CampaignDraftRequest("Campaign", "Brief"));
+        campaignTargets.replace("application-advertiser@example.com", draft.id(),
+                new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        campaignDrafts.publish("application-advertiser@example.com", draft.id(),
+                new com.streambid.campaign.CampaignPublishRequest(1L));
+        var now = java.time.Instant.now();
+        var request = new com.streambid.campaign.CampaignParticipation(UUID.randomUUID(), draft.id(), channel.id(),
+                channel.userId(), com.streambid.campaign.ParticipationDirection.APPLICATION,
+                com.streambid.campaign.ParticipationStatus.PENDING, 0, now, now);
+        var saved = participations.create(request).orElseThrow();
+        assertThat(participations.create(request)).isEmpty();
+        assertThat(participations.findForActor(saved.id(), owner)).contains(saved);
+        assertThat(participations.findForActor(saved.id(), channel.userId())).contains(saved);
+        assertThat(participations.findForActor(saved.id(), UUID.randomUUID())).isEmpty();
+        assertThat(participations.listForActor(owner, null, 20)).containsExactly(saved);
+        assertThat(participations.listForActor(owner, saved.id(), 20)).isEmpty();
+        assertThat(participations.listForActor(UUID.randomUUID(), null, 20)).isEmpty();
+    }
 
     @Test
     void databaseReadinessRequiresAuthentication() throws Exception {
