@@ -412,7 +412,8 @@ class ChannelRepositoryTest {
         mvc.perform(get(path).with(user("metadata-foreign@example.com"))).andExpect(status().isNotFound());
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
     }
-    @Autowired ChannelListingRepository listings;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean ChannelListingRepository listings;
+    @Autowired ChannelListingService listingService;
 
     @Test
     void channelListingIsHiddenByDefaultOwnedAndRequiresAuthorization() {
@@ -459,6 +460,55 @@ class ChannelRepositoryTest {
         store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
                 new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
         assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void disconnectWaitsForListingAndReconnectDoesNotRestoreVisibility() throws Exception {
+        String email = "listing-race@example.com";
+        var channel = channelForRefresh(email);
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var listingReachedWrite = new CountDownLatch(1);
+        var releaseListing = new CountDownLatch(1);
+        var disconnectStarted = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            doAnswer(call -> {
+                listingReachedWrite.countDown();
+                if (!releaseListing.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting to release listing update");
+                }
+                return call.callRealMethod();
+            }).when(listings).setOwned(channel.id(), channel.userId(), true);
+            var listing = executor.submit(() -> listingService.set(email, channel.id(), true));
+            assertThat(listingReachedWrite.await(5, TimeUnit.SECONDS)).isTrue();
+            var disconnect = executor.submit(() -> {
+                disconnectStarted.countDown();
+                disconnectService.disconnect(channel.id(), email);
+            });
+            assertThat(disconnectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> disconnect.get(200, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            releaseListing.countDown();
+            listing.get(5, TimeUnit.SECONDS);
+            disconnect.get(5, TimeUnit.SECONDS);
+            assertThat(credentials.find(channel.id())).isEmpty();
+            assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+            store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                    new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+            assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+            assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
+                    .extracting(com.streambid.campaign.CampaignCandidate::channelId).doesNotContain(channel.id());
+        } finally {
+            releaseListing.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+            reset(listings);
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id = ?", channel.userId());
+        }
     }
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
 
