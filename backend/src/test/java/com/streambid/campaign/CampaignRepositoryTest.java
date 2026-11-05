@@ -48,6 +48,38 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void targetingUsesDatabaseRolesAndPathCampaignInsteadOfBrowserClaims() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        UUID streamer = UUID.randomUUID();
+        users.save(new UserAccount(owner, "target-claims@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "target-foreign-claims@example.com", "hash", "Other"));
+        users.save(new UserAccount(streamer, "target-streamer@example.com", "hash", "Streamer"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(other, UserRole.ADVERTISER);
+        users.addRole(streamer, UserRole.STREAMER);
+        var own = drafts.create("target-claims@example.com", new CampaignDraftRequest("Own", ""));
+        var foreign = drafts.create("target-foreign-claims@example.com", new CampaignDraftRequest("Foreign", ""));
+        String ownPath = "/api/campaigns/" + own.id() + "/targeting";
+        String body = "{\"platforms\":[\"TWITCH\"],\"expectedVersion\":0,\"campaignId\":\"" + foreign.id()
+                + "\",\"advertiserId\":\"" + other + "\",\"version\":999,\"status\":\"ARCHIVED\"}";
+        mvc.perform(get(ownPath).with(user("target-streamer@example.com").roles("ADVERTISER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(put(ownPath).with(user("target-streamer@example.com").roles("ADVERTISER")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(put(ownPath).with(user("target-claims@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.campaignId").value(own.id().toString())).andExpect(jsonPath("$.version").value(1));
+        assertThat(targeting.readOwned(foreign.id(), other).orElseThrow().platforms()).isEmpty();
+        assertThat(campaigns.findOwned(foreign.id(), other).orElseThrow().version()).isZero();
+        assertThat(campaigns.findOwned(own.id(), owner).orElseThrow().status()).isEqualTo(CampaignStatus.DRAFT);
+        mvc.perform(put("/api/campaigns/" + foreign.id() + "/targeting").with(user("target-claims@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/campaigns/" + UUID.randomUUID() + "/targeting").with(user("target-claims@example.com")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void targetingReadKeepsOneSnapshotWhileSelectionChanges() throws Exception {
         UUID owner = UUID.randomUUID();
