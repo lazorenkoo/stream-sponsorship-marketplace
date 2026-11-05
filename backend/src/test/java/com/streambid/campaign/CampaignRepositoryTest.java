@@ -48,6 +48,31 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void catalogExposesPublishedCampaignsAndHidesDraftsAndArchivedCampaigns() throws Exception {
+        String email = "catalog-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var draft = drafts.create(email, new CampaignDraftRequest("Visible campaign", "Brief"));
+        String path = "/api/catalog/campaigns/" + draft.id();
+        mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isNotFound());
+        targetingService.replace(email, draft.id(), new CampaignTargetingRequest(
+                java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+        drafts.publish(email, draft.id(), new CampaignPublishRequest(1L));
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("Visible campaign"))
+                .andExpect(jsonPath("$.publishedAt").isNotEmpty()).andExpect(jsonPath("$.advertiserId").doesNotExist());
+        mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")).param("limit", "101"))
+                .andExpect(status().isBadRequest());
+        drafts.archive(email, draft.id(), new CampaignArchiveRequest(2L));
+        mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+    }
+    @Test
     void advertiserPublishesConfiguredDraftAndCanArchiveIt() throws Exception {
         String email = "publication@example.com";
         UUID owner = UUID.randomUUID();
