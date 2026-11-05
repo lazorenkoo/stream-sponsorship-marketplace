@@ -48,6 +48,48 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void targetingReadKeepsOneSnapshotWhileSelectionChanges() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "snapshot-target@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("snapshot-target@example.com", new CampaignDraftRequest("Draft", ""));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new AssertionError("Snapshot test timed out");
+            }
+            return invocation.callRealMethod();
+        }).when(targeting).readOwned(campaign.id(), owner);
+        try {
+            var reading = executor.submit(() -> targetingService.read("snapshot-target@example.com", campaign.id()));
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            var changed = targetingService.replace("snapshot-target@example.com", campaign.id(), new CampaignTargetingRequest(
+                    java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+            assertThat(changed.version()).isEqualTo(1);
+            release.countDown();
+            var snapshot = reading.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(snapshot.version()).isZero();
+            assertThat(snapshot.platforms()).isEmpty();
+            var current = targetingService.read("snapshot-target@example.com", campaign.id());
+            assertThat(current.version()).isEqualTo(1);
+            assertThat(current.platforms()).containsExactly(com.streambid.platform.StreamingPlatform.TWITCH);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            org.mockito.Mockito.reset(targeting);
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    @Test
     void targetingCanBeClearedAndRemainsReadableAfterArchiving() throws Exception {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, "clear-targets@example.com", "hash", "Owner"));
@@ -229,7 +271,7 @@ class CampaignRepositoryTest {
         assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEqualTo(platforms);
     }
 
-    @Autowired CampaignTargetingRepository targeting;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean CampaignTargetingRepository targeting;
 
     @Test
     void targetPlatformsReplaceClearAndRespectReadOwnership() {
