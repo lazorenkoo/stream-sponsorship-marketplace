@@ -542,6 +542,7 @@ class ChannelRepositoryTest {
         var channel = channelForRefresh("revoked-listing@example.com");
         listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
         credentials.delete(channel.id());
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
         store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
                 new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
         assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
@@ -807,6 +808,9 @@ class ChannelRepositoryTest {
         assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isTrue();
         assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
                 .extracting(com.streambid.campaign.CampaignCandidate::channelId).contains(channel.id());
+        credentials.deleteIfUnchanged(current);
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
     }
     @Test
     void temporaryRefreshFailurePreservesStoredCredentials() {

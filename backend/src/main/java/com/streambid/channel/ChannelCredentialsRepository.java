@@ -48,9 +48,15 @@ public class ChannelCredentialsRepository {
                 .orderBy(CHANNEL_ID).limit(limit).fetch(CHANNEL_ID);
     }
     public void deleteIfUnchanged(ChannelCredentials snapshot) {
-        database.deleteFrom(DSL.table(DSL.name("channel_credentials")))
-                .where(CHANNEL_ID.eq(snapshot.channelId())).and(ACCESS.eq(snapshot.accessTokenCiphertext()))
-                .and(REFRESH.eq(snapshot.refreshTokenCiphertext())).execute();
+        database.execute("""
+                WITH removed AS (
+                    DELETE FROM channel_credentials
+                    WHERE channel_id = ? AND access_token_ciphertext = ? AND refresh_token_ciphertext = ?
+                    RETURNING channel_id
+                )
+                UPDATE channel_listings SET listed = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE listed AND channel_id IN (SELECT channel_id FROM removed)
+                """, snapshot.channelId(), snapshot.accessTokenCiphertext(), snapshot.refreshTokenCiphertext());
     }
     public Optional<ChannelCredentials> lock(UUID channelId) {
         return database.select(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
@@ -59,7 +65,13 @@ public class ChannelCredentialsRepository {
     }
 
     public void delete(UUID channelId) {
-        database.deleteFrom(DSL.table(DSL.name("channel_credentials"))).where(CHANNEL_ID.eq(channelId)).execute();
+        database.execute("""
+                WITH removed AS (
+                    DELETE FROM channel_credentials WHERE channel_id = ? RETURNING channel_id
+                )
+                UPDATE channel_listings SET listed = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE listed AND channel_id IN (SELECT channel_id FROM removed)
+                """, channelId);
     }
     public Optional<ChannelCredentials> find(UUID channelId) {
         return database.select(CHANNEL_ID, ACCESS, REFRESH, EXPIRES, VALIDATED)
