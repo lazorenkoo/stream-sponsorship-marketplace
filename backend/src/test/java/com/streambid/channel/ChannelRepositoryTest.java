@@ -543,9 +543,11 @@ class ChannelRepositoryTest {
         var hidden = channelForRefresh("candidate-hidden@example.com");
         var disconnected = channelForRefresh("candidate-disconnected@example.com");
         var otherPlatform = channelForRefresh("candidate-youtube@example.com");
+        var kickChannel = channelForPlatform("candidate-kick@example.com", StreamingPlatform.KICK);
         for (var channel : java.util.List.of(first, second, disconnected, otherPlatform)) {
             listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
         }
+        listings.setOwned(kickChannel.id(), kickChannel.userId(), true).orElseThrow();
         credentials.delete(disconnected.id());
         database.execute("UPDATE connected_channels SET platform = 'YOUTUBE' WHERE id = ?", otherPlatform.id());
         var selected = java.util.Set.of(StreamingPlatform.TWITCH);
@@ -558,6 +560,8 @@ class ChannelRepositoryTest {
         assertThat(candidates.find(selected, next.getFirst().channelId(), 1)).isEmpty();
         assertThat(candidates.find(java.util.Set.of(StreamingPlatform.YOUTUBE), null, 100))
                 .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(otherPlatform.id());
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.KICK), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(kickChannel.id());
         assertThat(candidates.find(java.util.Set.of(), null, 100)).isEmpty();
         assertThat(candidates.find(selected, null, 100)).extracting(com.streambid.campaign.CampaignCandidate::channelId)
                 .doesNotContain(hidden.id(), disconnected.id(), otherPlatform.id());
@@ -701,6 +705,18 @@ class ChannelRepositoryTest {
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
         return store.save(owner, new ChannelInfo(email, "Refresh", null),
                 new TwitchUserTokens("old-access", "old-refresh", java.time.Instant.now().plusSeconds(3600)));
+    }
+
+    private ConnectedChannel channelForPlatform(String email, StreamingPlatform platform) {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Candidate"));
+        var now = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+        var channel = new ConnectedChannel(UUID.randomUUID(), owner, platform, "candidate-id", "Candidate", now);
+        channels.saveVerified(channel);
+        var cipher = new TokenCipher(Base64.getEncoder().encodeToString(new byte[32]));
+        credentials.save(new ChannelCredentials(channel.id(), cipher.encrypt("access", channel.id() + ":access"),
+                cipher.encrypt("refresh", channel.id() + ":refresh"), now.plusHours(1), now));
+        return channel;
     }
 
     @Test
