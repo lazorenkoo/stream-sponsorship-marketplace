@@ -16,6 +16,9 @@ class CampaignCandidateTest {
         assertThat(new CampaignCandidate(id, StreamingPlatform.TWITCH, "N".repeat(255)).displayName()).hasSize(255);
         assertThatThrownBy(() -> new CampaignCandidate(id, StreamingPlatform.TWITCH, " "))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CampaignCandidate(id, null, "Streamer")).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new CampaignCandidate(id, StreamingPlatform.TWITCH, null))
+                .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new CampaignCandidate(id, StreamingPlatform.TWITCH, "N".repeat(256)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CampaignCandidate(null, StreamingPlatform.TWITCH, "Streamer"))
@@ -39,6 +42,8 @@ class CampaignCandidateTest {
         assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, 0, java.util.List.of(), null, true))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, 0, java.util.List.of(candidate),
+                UUID.randomUUID(), true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, 0, java.util.List.of(),
                 UUID.randomUUID(), true)).isInstanceOf(IllegalArgumentException.class);
     }
 }
