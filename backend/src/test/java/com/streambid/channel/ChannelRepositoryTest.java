@@ -578,6 +578,27 @@ class ChannelRepositoryTest {
         campaignDrafts.archive("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignArchiveRequest(1L));
         mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isConflict());
     }
+
+    @Test
+    void candidatePreviewCursorEndsAndUnlistingRemovesChannel() throws Exception {
+        var visible = channelForRefresh("preview-cursor-channel@example.com");
+        UUID advertiser = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "preview-cursor-owner@example.com", "hash", "Advertiser"));
+        users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
+        var campaign = campaignDrafts.create("preview-cursor-owner@example.com",
+                new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
+        campaignTargets.replace("preview-cursor-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
+        String path = "/api/campaigns/" + campaign.id() + "/candidates";
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1));
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", visible.id().toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0));
+        listings.setOwned(visible.id(), visible.userId(), false).orElseThrow();
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0));
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
