@@ -460,6 +460,36 @@ class ChannelRepositoryTest {
                 new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
         assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
     }
+    @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
+
+    @Test
+    void candidateSelectionRequiresListingCredentialsAndSelectedPlatform() {
+        var first = channelForRefresh("candidate-visible-one@example.com");
+        var second = channelForRefresh("candidate-visible-two@example.com");
+        var hidden = channelForRefresh("candidate-hidden@example.com");
+        var disconnected = channelForRefresh("candidate-disconnected@example.com");
+        var otherPlatform = channelForRefresh("candidate-youtube@example.com");
+        for (var channel : java.util.List.of(first, second, disconnected, otherPlatform)) {
+            listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        }
+        credentials.delete(disconnected.id());
+        database.execute("UPDATE connected_channels SET platform = 'YOUTUBE' WHERE id = ?", otherPlatform.id());
+        var selected = java.util.Set.of(StreamingPlatform.TWITCH);
+        var page = candidates.find(selected, null, 1);
+        assertThat(page).hasSize(1);
+        var next = candidates.find(selected, page.getFirst().channelId(), 1);
+        assertThat(next).hasSize(1);
+        assertThat(java.util.Set.of(page.getFirst().channelId(), next.getFirst().channelId()))
+                .containsExactlyInAnyOrder(first.id(), second.id());
+        assertThat(candidates.find(selected, next.getFirst().channelId(), 1)).isEmpty();
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.YOUTUBE), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(otherPlatform.id());
+        assertThat(candidates.find(java.util.Set.of(), null, 100)).isEmpty();
+        assertThat(candidates.find(selected, null, 100)).extracting(com.streambid.campaign.CampaignCandidate::channelId)
+                .doesNotContain(hidden.id(), disconnected.id(), otherPlatform.id());
+        assertThatThrownBy(() -> candidates.find(selected, null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> candidates.find(selected, null, 101)).isInstanceOf(IllegalArgumentException.class);
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
