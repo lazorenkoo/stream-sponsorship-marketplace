@@ -1,10 +1,15 @@
 package com.streambid.campaign;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 public record CampaignCandidatePreview(UUID campaignId, long campaignVersion, List<CampaignCandidate> candidates) {
     public CampaignCandidatePreview {
+        Objects.requireNonNull(campaignId, "Campaign ID is required");
+        if (campaignVersion < 0) {
+            throw new IllegalArgumentException("Campaign version cannot be negative");
+        }
         candidates = List.copyOf(candidates);
     }
 }
