@@ -49,4 +49,10 @@ public class CampaignParticipationController {
         return ResponseEntity.created(URI.create("/api/participations/" + request.id()))
                 .cacheControl(CacheControl.noStore()).body(request);
     }
+    @PostMapping("/api/participations/{id}/decision")
+    public ResponseEntity<CampaignParticipation> decide(@PathVariable UUID id, Principal principal,
+            @Valid @RequestBody ParticipationDecisionRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(requests.decide(principal.getName(), id, request));
+    }
 }

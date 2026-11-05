@@ -66,4 +66,23 @@ public class CampaignParticipationService {
     private UUID actorId(String email) {
         return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
     }
+    @Transactional
+    public CampaignParticipation decide(String email, UUID id, ParticipationDecisionRequest decision) {
+        UUID actor = actorId(email);
+        var request = requests.findForActor(id, actor)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        boolean initiator = request.initiatedBy().equals(actor);
+        boolean withdraw = decision.action() == ParticipationAction.WITHDRAW;
+        if (withdraw != initiator) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the recipient can accept or reject a request");
+        }
+        var next = switch (decision.action()) {
+            case ACCEPT -> ParticipationStatus.ACCEPTED;
+            case REJECT -> ParticipationStatus.REJECTED;
+            case WITHDRAW -> ParticipationStatus.WITHDRAWN;
+        };
+        return requests.decide(request, next, decision.expectedVersion(), clock.instant())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Request has changed or is no longer eligible for this action"));
+    }
 }

@@ -593,6 +593,20 @@ class ChannelRepositoryTest {
         mvc.perform(post(path + "/invitations").with(user("application-advertiser@example.com")).with(csrf())
                 .contentType("application/json").content("{\"channelId\":\"" + invited.id() + "\"}"))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.direction").value("INVITATION"));
+        String decision = "/api/participations/" + saved.id() + "/decision";
+        String accept = "{\"action\":\"ACCEPT\",\"expectedVersion\":0}";
+        mvc.perform(post(decision).with(user("applicant@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isForbidden());
+        mvc.perform(post(decision).with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACCEPTED")).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(decision).with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isConflict());
+        var invitation = participations.listForActor(invited.userId(), null, 20).getFirst();
+        mvc.perform(post("/api/participations/" + invitation.id() + "/decision")
+                .with(user("http-invited@example.com")).with(csrf()).contentType("application/json")
+                .content("{\"action\":\"REJECT\",\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"));
     }
 
     @Test

@@ -46,6 +46,26 @@ public class CampaignParticipationRepository {
                 WHERE p.id = ? AND (c.advertiser_id = ? OR ch.user_id = ?)
                 """, id, actor, actor).map(this::map);
     }
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public Optional<CampaignParticipation> decide(CampaignParticipation request, ParticipationStatus next,
+            long expectedVersion, java.time.Instant now) {
+        return database.fetchOptional("""
+                WITH locked_campaign AS (
+                    SELECT id, status FROM campaigns WHERE id = ? FOR UPDATE
+                )
+                UPDATE campaign_participations p SET status = ?, version = p.version + 1,
+                    updated_at = GREATEST(p.updated_at, CAST(? AS timestamptz))
+                FROM locked_campaign c
+                WHERE p.id = ? AND p.campaign_id = c.id AND p.status = 'PENDING' AND p.version = ?
+                  AND (? = 'WITHDRAWN' OR c.status = 'PUBLISHED')
+                  AND (? <> 'ACCEPTED' OR EXISTS (
+                      SELECT 1 FROM connected_channels ch JOIN channel_credentials t ON t.channel_id = ch.id
+                      JOIN campaign_target_platforms target ON target.campaign_id = c.id AND target.platform = ch.platform
+                      WHERE ch.id = p.channel_id))
+                RETURNING p.*
+                """, request.campaignId(), next.name(), OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
+                request.id(), expectedVersion, next.name(), next.name()).map(this::map);
+    }
 
     public List<CampaignParticipation> listForActor(UUID actor, UUID after, int limit) {
         if (limit < 1 || limit > 100) {
