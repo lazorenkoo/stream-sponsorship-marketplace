@@ -48,6 +48,75 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void targetingAndDraftEditShareOneVersionAndHistoryWinner() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "target-race@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("target-race@example.com", new CampaignDraftRequest("Original", ""));
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var edit = executor.submit(() -> raceChange(barrier, () -> drafts.update("target-race@example.com", campaign.id(),
+                    new CampaignDraftUpdateRequest("Edited", "", 0L))));
+            var targets = executor.submit(() -> raceChange(barrier, () -> {
+                targetingService.replace("target-race@example.com", campaign.id(), new CampaignTargetingRequest(
+                        java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+                return campaign;
+            }));
+            assertThat(java.util.List.of(edit.get(10, java.util.concurrent.TimeUnit.SECONDS),
+                    targets.get(10, java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder(200, 409);
+            var saved = campaigns.findOwned(campaign.id(), owner).orElseThrow();
+            var history = events.findOwned(campaign.id(), owner, null, 100);
+            var platforms = targeting.readOwned(campaign.id(), owner).orElseThrow().platforms();
+            assertThat(saved.version()).isEqualTo(1);
+            assertThat(history).hasSize(2);
+            assertThat(history.getFirst().campaignVersion()).isEqualTo(1);
+            if (history.getFirst().type() == CampaignEventType.TARGETING_CHANGED) {
+                assertThat(platforms).containsExactly(com.streambid.platform.StreamingPlatform.TWITCH);
+                assertThat(saved.title()).isEqualTo("Original");
+            } else {
+                assertThat(history.getFirst().type()).isEqualTo(CampaignEventType.EDITED);
+                assertThat(platforms).isEmpty();
+                assertThat(saved.title()).isEqualTo("Edited");
+            }
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void databaseRejectsDuplicateUnknownAndOrphanTargetPlatforms() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "target-constraints@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("target-constraints@example.com", new CampaignDraftRequest("Draft", ""));
+        String insert = "INSERT INTO campaign_target_platforms (campaign_id, platform) VALUES (?, ?)";
+        try {
+            database.execute(insert, campaign.id(), "TWITCH");
+            for (String invalid : new String[] {"TWITCH", "INVALID"}) {
+                assertThatThrownBy(() -> database.execute(insert, campaign.id(), invalid))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            }
+            assertThatThrownBy(() -> database.execute(insert, UUID.randomUUID(), "TWITCH"))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms())
+                    .containsExactly(com.streambid.platform.StreamingPlatform.TWITCH);
+        } finally {
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    @Test
     void targetingApiChecksOwnershipVersionCsrfAndPlatformInput() throws Exception {
         UUID owner = UUID.randomUUID();
         UUID other = UUID.randomUUID();
