@@ -48,6 +48,33 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void targetingCanBeClearedAndRemainsReadableAfterArchiving() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "clear-targets@example.com", "hash", "Owner"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var campaign = drafts.create("clear-targets@example.com", new CampaignDraftRequest("Draft", ""));
+        targetingService.replace("clear-targets@example.com", campaign.id(), new CampaignTargetingRequest(
+                java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+        String path = "/api/campaigns/" + campaign.id() + "/targeting";
+        mvc.perform(put(path).with(user("clear-targets@example.com")).with(csrf()).contentType("application/json")
+                .content("{\"platforms\":[],\"expectedVersion\":1}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.platforms.length()").value(0));
+        drafts.archive("clear-targets@example.com", campaign.id(), new CampaignArchiveRequest(2L));
+        mvc.perform(get(path).with(user("clear-targets@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(3)).andExpect(jsonPath("$.platforms.length()").value(0))
+                .andExpect(header().string("Cache-Control", "no-store"));
+        mvc.perform(put(path).with(user("clear-targets@example.com")).with(csrf()).contentType("application/json")
+                .content("{\"platforms\":[\"TWITCH\"],\"expectedVersion\":3}"))
+                .andExpect(status().isConflict());
+        assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEmpty();
+        assertThat(campaigns.findOwned(campaign.id(), owner).orElseThrow().version()).isEqualTo(3);
+        assertThat(events.findOwned(campaign.id(), owner, null, 100)).extracting(CampaignEvent::type)
+                .containsExactly(CampaignEventType.ARCHIVED, CampaignEventType.TARGETING_CHANGED,
+                        CampaignEventType.TARGETING_CHANGED, CampaignEventType.CREATED);
+    }
+
+    @Test
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void targetingAndDraftEditShareOneVersionAndHistoryWinner() throws Exception {
         UUID owner = UUID.randomUUID();
