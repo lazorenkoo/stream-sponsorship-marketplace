@@ -84,6 +84,16 @@ public class CampaignDraftService {
         recordEvent(saved, CampaignEventType.ARCHIVED);
         return saved;
     }
+    @Transactional
+    public Campaign publish(String email, UUID id, CampaignPublishRequest request) {
+        var user = requireAdvertiser(email);
+        campaigns.findOwned(id, user.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        var saved = campaigns.publishOwned(id, user.id(), request.expectedVersion(), clock.instant())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Publishing requires a current draft with selected platforms"));
+        recordEvent(saved, CampaignEventType.PUBLISHED);
+        return saved;
+    }
     @Transactional(readOnly = true)
     public java.util.List<CampaignEvent> history(String email, UUID id, Long beforeVersion, int limit) {
         var user = requireAdvertiser(email);

@@ -31,9 +31,20 @@ public class CampaignRepository {
         return database.fetchOptional("""
                 UPDATE campaigns SET status = 'ARCHIVED',
                     updated_at = GREATEST(updated_at, CAST(? AS timestamptz)), version = version + 1
-                WHERE id = ? AND advertiser_id = ? AND status = 'DRAFT' AND version = ?
+                WHERE id = ? AND advertiser_id = ? AND status IN ('DRAFT', 'PUBLISHED') AND version = ?
                 RETURNING *
                 """, OffsetDateTime.ofInstant(archivedAt, ZoneOffset.UTC), id, advertiser, expectedVersion).map(this::map);
+    }
+    public Optional<Campaign> publishOwned(UUID id, UUID advertiser, long expectedVersion, Instant publishedAt) {
+        return database.fetchOptional("""
+                UPDATE campaigns SET status = 'PUBLISHED',
+                    published_at = GREATEST(updated_at, CAST(? AS timestamptz)),
+                    updated_at = GREATEST(updated_at, CAST(? AS timestamptz)), version = version + 1
+                WHERE id = ? AND advertiser_id = ? AND status = 'DRAFT' AND version = ?
+                  AND EXISTS (SELECT 1 FROM campaign_target_platforms p WHERE p.campaign_id = campaigns.id)
+                RETURNING *
+                """, OffsetDateTime.ofInstant(publishedAt, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(publishedAt, ZoneOffset.UTC), id, advertiser, expectedVersion).map(this::map);
     }
     public Optional<Campaign> updateDraft(Campaign draft, long expectedVersion) {
         return database.fetchOptional("""

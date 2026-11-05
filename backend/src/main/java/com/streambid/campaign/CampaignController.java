@@ -47,6 +47,12 @@ public class CampaignController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .body(drafts.archive(principal.getName(), id, request));
     }
+    @PostMapping("/api/campaigns/{id}/publish")
+    public ResponseEntity<Campaign> publish(@PathVariable UUID id, Principal principal,
+            @Valid @RequestBody CampaignPublishRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(drafts.publish(principal.getName(), id, request));
+    }
     @GetMapping("/api/campaigns/{id}/events")
     public ResponseEntity<List<CampaignEvent>> history(@PathVariable UUID id, Principal principal,
             @RequestParam(defaultValue = "20") int limit, @RequestParam(required = false) Long beforeVersion) {

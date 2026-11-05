@@ -48,6 +48,30 @@ class CampaignRepositoryTest {
 
     @Autowired MockMvc mvc;
     @Test
+    void advertiserPublishesConfiguredDraftAndCanArchiveIt() throws Exception {
+        String email = "publication@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var draft = drafts.create(email, new CampaignDraftRequest("Campaign", "Brief"));
+        String path = "/api/campaigns/" + draft.id() + "/publish";
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                .content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
+        targetingService.replace(email, draft.id(), new CampaignTargetingRequest(
+                java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+        mvc.perform(post(path).with(user(email)).contentType("application/json")
+                .content("{\"expectedVersion\":1}")).andExpect(status().isForbidden());
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                .content("{\"expectedVersion\":1}")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PUBLISHED")).andExpect(jsonPath("$.version").value(2));
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                .content("{\"expectedVersion\":2}")).andExpect(status().isConflict());
+        assertThat(events.findOwned(draft.id(), owner, null, 100).getFirst().type()).isEqualTo(CampaignEventType.PUBLISHED);
+        assertThatThrownBy(() -> drafts.update(email, draft.id(), new CampaignDraftUpdateRequest("Changed", "", 2L)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThat(drafts.archive(email, draft.id(), new CampaignArchiveRequest(2L)).status()).isEqualTo(CampaignStatus.ARCHIVED);
+    }
+    @Test
     void targetingUsesDatabaseRolesAndPathCampaignInsteadOfBrowserClaims() throws Exception {
         UUID owner = UUID.randomUUID();
         UUID other = UUID.randomUUID();
