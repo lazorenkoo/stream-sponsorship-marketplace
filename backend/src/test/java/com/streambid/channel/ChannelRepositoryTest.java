@@ -490,6 +490,44 @@ class ChannelRepositoryTest {
         assertThatThrownBy(() -> candidates.find(selected, null, 0)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> candidates.find(selected, null, 101)).isInstanceOf(IllegalArgumentException.class);
     }
+    @Autowired com.streambid.campaign.CampaignDraftService campaignDrafts;
+    @Autowired com.streambid.campaign.CampaignTargetingService campaignTargets;
+
+    @Test
+    void candidatePreviewIsAdvertiserOwnedAndExposesOnlyListedChannelSummary() throws Exception {
+        var visible = channelForRefresh("preview-visible@example.com");
+        channelForRefresh("preview-hidden@example.com");
+        UUID advertiser = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "preview-owner@example.com", "hash", "Advertiser"));
+        users.save(new UserAccount(other, "preview-other@example.com", "hash", "Other"));
+        users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
+        users.addRole(other, com.streambid.user.UserRole.ADVERTISER);
+        var campaign = campaignDrafts.create("preview-owner@example.com", new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
+        String path = "/api/campaigns/" + campaign.id() + "/candidates";
+        mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.candidates.length()").value(0));
+        campaignTargets.replace("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
+        var result = mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.campaignVersion").value(1)).andExpect(jsonPath("$.candidates.length()").value(1))
+                .andExpect(jsonPath("$.candidates[0].channelId").value(visible.id().toString()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store")).andReturn();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("userId", "advertiserId", "externalChannelId",
+                "accessToken", "refreshToken", "old-access", "old-refresh");
+        mvc.perform(get(path).with(user("preview-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path).with(user("preview-visible@example.com"))).andExpect(status().isForbidden());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        for (String invalid : new String[] {"0", "101", "text"}) {
+            mvc.perform(get(path).with(user("preview-owner@example.com")).param("limit", invalid)).andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path).with(user("preview-owner@example.com")).param("after", "invalid"))
+                .andExpect(status().isBadRequest());
+        campaignDrafts.archive("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignArchiveRequest(1L));
+        mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isConflict());
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
