@@ -18,7 +18,7 @@ public class ReadinessController {
     @GetMapping("/api/health/ready")
     public ResponseEntity<Readiness> ready() {
         try {
-            database.fetch("SELECT 1");
+            database.resultQuery("SELECT 1").queryTimeout(2).fetch();
             return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new Readiness("UP"));
         } catch (DataAccessException | org.jooq.exception.DataAccessException exception) {
             return ResponseEntity.status(503).cacheControl(CacheControl.noStore()).body(new Readiness("DOWN"));
