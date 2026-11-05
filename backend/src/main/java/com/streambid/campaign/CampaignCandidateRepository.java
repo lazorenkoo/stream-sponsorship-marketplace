@@ -15,6 +15,14 @@ public class CampaignCandidateRepository {
     public CampaignCandidateRepository(DSLContext database) {
         this.database = database;
     }
+    public java.util.Optional<CampaignCandidate> findListed(UUID channelId) {
+        return database.fetchOptional("""
+                SELECT c.id, c.platform, c.display_name FROM connected_channels c
+                JOIN channel_listings l ON l.channel_id = c.id AND l.listed
+                JOIN channel_credentials t ON t.channel_id = c.id WHERE c.id = ?
+                """, channelId).map(row -> new CampaignCandidate(row.get("id", UUID.class),
+                        StreamingPlatform.valueOf(row.get("platform", String.class)), row.get("display_name", String.class)));
+    }
 
     public List<CampaignCandidate> find(Set<StreamingPlatform> selected, UUID after, int limit) {
         var platforms = Set.copyOf(selected);
