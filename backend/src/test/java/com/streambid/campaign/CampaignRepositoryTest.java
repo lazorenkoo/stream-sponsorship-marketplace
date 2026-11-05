@@ -296,11 +296,20 @@ class CampaignRepositoryTest {
         assertThatThrownBy(() -> targetingService.replace("target-service@example.com", campaign.id(),
                 new CampaignTargetingRequest(java.util.Set.of(), 0L)))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
-        drafts.archive("target-service@example.com", campaign.id(), new CampaignArchiveRequest(1L));
-        assertThatThrownBy(() -> targetingService.replace("target-service@example.com", campaign.id(),
-                new CampaignTargetingRequest(java.util.Set.of(), 2L)))
-                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThat(campaigns.findOwned(campaign.id(), owner).orElseThrow().version()).isEqualTo(1);
         assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEqualTo(platforms);
+        assertThat(events.findOwned(campaign.id(), owner, null, 100)).hasSize(2);
+        var cleared = targetingService.replace("target-service@example.com", campaign.id(),
+                new CampaignTargetingRequest(java.util.Set.of(), 1L));
+        assertThat(cleared.version()).isEqualTo(2);
+        assertThat(cleared.platforms()).isEmpty();
+        assertThat(events.findOwned(campaign.id(), owner, null, 100)).extracting(CampaignEvent::campaignVersion)
+                .containsExactly(2L, 1L, 0L);
+        drafts.archive("target-service@example.com", campaign.id(), new CampaignArchiveRequest(2L));
+        assertThatThrownBy(() -> targetingService.replace("target-service@example.com", campaign.id(),
+                new CampaignTargetingRequest(java.util.Set.of(), 3L)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThat(targeting.readOwned(campaign.id(), owner).orElseThrow().platforms()).isEmpty();
     }
 
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean CampaignTargetingRepository targeting;
