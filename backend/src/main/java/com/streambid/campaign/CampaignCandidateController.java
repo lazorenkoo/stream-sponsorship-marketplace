@@ -19,8 +19,9 @@ public class CampaignCandidateController {
 
     @GetMapping("/api/campaigns/{id}/candidates")
     public ResponseEntity<CampaignCandidatePreview> preview(@PathVariable UUID id, Principal principal,
-            @RequestParam(required = false) UUID after, @RequestParam(defaultValue = "20") int limit) {
+            @RequestParam(required = false) UUID after, @RequestParam(required = false) Long expectedVersion,
+            @RequestParam(defaultValue = "20") int limit) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(candidates.preview(principal.getName(), id, after, limit));
+                .body(candidates.preview(principal.getName(), id, after, expectedVersion, limit));
     }
 }

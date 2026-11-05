@@ -626,10 +626,17 @@ class ChannelRepositoryTest {
                 .andExpect(jsonPath("$.hasMore").value(true))
                 .andExpect(jsonPath("$.nextCursor").value(ordered.getFirst().toString()));
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
-                        .param("limit", "1"))
+                        .param("expectedVersion", "1").param("limit", "1"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1))
                 .andExpect(jsonPath("$.candidates[0].channelId").value(ordered.getLast().toString()))
                 .andExpect(jsonPath("$.hasMore").value(false)).andExpect(jsonPath("$.nextCursor").doesNotExist());
+        campaignTargets.replace("preview-cursor-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.YOUTUBE), 1L));
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
+                        .param("expectedVersion", "1"))
+                .andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("expectedVersion", "-1"))
+                .andExpect(status().isBadRequest());
         listings.setOwned(visible.id(), visible.userId(), false).orElseThrow();
         listings.setOwned(second.id(), second.userId(), false).orElseThrow();
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")))
@@ -660,7 +667,7 @@ class ChannelRepositoryTest {
             return call.callRealMethod();
         }).when(targetingRepository).readOwned(campaign.id(), owner);
         try {
-            var reading = executor.submit(() -> candidateService.preview(email, campaign.id(), null, 20));
+            var reading = executor.submit(() -> candidateService.preview(email, campaign.id(), null, null, 20));
             assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
             var changed = campaignTargets.replace(email, campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
                     java.util.Set.of(StreamingPlatform.YOUTUBE), 1L));
@@ -670,7 +677,7 @@ class ChannelRepositoryTest {
             assertThat(snapshot.campaignVersion()).isEqualTo(1);
             assertThat(snapshot.candidates()).extracting(com.streambid.campaign.CampaignCandidate::channelId)
                     .containsExactly(channel.id());
-            var current = candidateService.preview(email, campaign.id(), null, 20);
+            var current = candidateService.preview(email, campaign.id(), null, null, 20);
             assertThat(current.campaignVersion()).isEqualTo(2);
             assertThat(current.candidates()).isEmpty();
         } finally {
