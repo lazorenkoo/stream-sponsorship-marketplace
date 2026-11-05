@@ -594,7 +594,8 @@ class ChannelRepositoryTest {
         var campaign = campaignDrafts.create("preview-owner@example.com", new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
         String path = "/api/campaigns/" + campaign.id() + "/candidates";
         mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isOk())
-                .andExpect(jsonPath("$.candidates.length()").value(0));
+                .andExpect(jsonPath("$.candidates.length()").value(0))
+                .andExpect(jsonPath("$.hasMore").value(false)).andExpect(jsonPath("$.nextCursor").doesNotExist());
         campaignTargets.replace("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
                 java.util.Set.of(StreamingPlatform.TWITCH), 0L));
         listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
