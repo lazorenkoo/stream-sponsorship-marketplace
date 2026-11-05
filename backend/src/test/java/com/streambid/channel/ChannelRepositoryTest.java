@@ -412,6 +412,25 @@ class ChannelRepositoryTest {
         mvc.perform(get(path).with(user("metadata-foreign@example.com"))).andExpect(status().isNotFound());
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
     }
+    @Autowired ChannelListingRepository listings;
+
+    @Test
+    void channelListingIsHiddenByDefaultOwnedAndRequiresAuthorization() {
+        var channel = channelForRefresh("listing@example.com");
+        var initial = listings.readOwned(channel.id(), channel.userId()).orElseThrow();
+        assertThat(initial.listed()).isFalse();
+        assertThat(initial.updatedAt()).isNull();
+        assertThat(listings.readOwned(channel.id(), UUID.randomUUID())).isEmpty();
+        assertThat(listings.setOwned(channel.id(), UUID.randomUUID(), true)).isEmpty();
+        var listed = listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        assertThat(listed.listed()).isTrue();
+        assertThat(listed.updatedAt()).isNotNull();
+        assertThat(listings.readOwned(channel.id(), channel.userId())).contains(listed);
+        credentials.delete(channel.id());
+        assertThat(listings.setOwned(channel.id(), channel.userId(), true)).isEmpty();
+        assertThat(listings.setOwned(channel.id(), channel.userId(), false).orElseThrow().listed()).isFalse();
+        assertThat(channels.find(channel.id())).isPresent();
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));
