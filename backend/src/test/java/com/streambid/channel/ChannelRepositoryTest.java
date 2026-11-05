@@ -566,6 +566,9 @@ class ChannelRepositoryTest {
     }
     @Autowired com.streambid.campaign.CampaignDraftService campaignDrafts;
     @Autowired com.streambid.campaign.CampaignTargetingService campaignTargets;
+    @Autowired com.streambid.campaign.CampaignCandidateService candidateService;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    com.streambid.campaign.CampaignTargetingRepository targetingRepository;
 
     @Test
     void candidatePreviewIsAdvertiserOwnedAndExposesOnlyListedChannelSummary() throws Exception {
@@ -622,6 +625,57 @@ class ChannelRepositoryTest {
         listings.setOwned(visible.id(), visible.userId(), false).orElseThrow();
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void candidatePreviewKeepsCampaignVersionAndTargetsInOneSnapshot() throws Exception {
+        String email = "preview-snapshot-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var channel = channelForRefresh("preview-snapshot-channel@example.com");
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var campaign = campaignDrafts.create(email, new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
+        campaignTargets.replace(email, campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var executor = Executors.newSingleThreadExecutor();
+        doAnswer(call -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting to release candidate preview");
+            }
+            return call.callRealMethod();
+        }).when(targetingRepository).readOwned(campaign.id(), owner);
+        try {
+            var reading = executor.submit(() -> candidateService.preview(email, campaign.id(), null, 20));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            var changed = campaignTargets.replace(email, campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                    java.util.Set.of(StreamingPlatform.YOUTUBE), 1L));
+            assertThat(changed.version()).isEqualTo(2);
+            release.countDown();
+            var snapshot = reading.get(5, TimeUnit.SECONDS);
+            assertThat(snapshot.campaignVersion()).isEqualTo(1);
+            assertThat(snapshot.candidates()).extracting(com.streambid.campaign.CampaignCandidate::channelId)
+                    .containsExactly(channel.id());
+            var current = candidateService.preview(email, campaign.id(), null, 20);
+            assertThat(current.campaignVersion()).isEqualTo(2);
+            assertThat(current.candidates()).isEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            reset(targetingRepository);
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id IN (?, ?)", owner, channel.userId());
+        }
     }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
