@@ -34,6 +34,9 @@ public class ChannelListingRepository {
                 """, listed, channelId, owner, listed).map(this::map);
     }
 
+    public void hideExisting(UUID channelId) {
+        database.execute("UPDATE channel_listings SET listed = FALSE, updated_at = CURRENT_TIMESTAMP WHERE channel_id = ? AND listed", channelId);
+    }
     private ChannelListing map(Record row) {
         var updatedAt = row.get("updated_at", OffsetDateTime.class);
         return new ChannelListing(row.get("channel_id", UUID.class), row.get("listed", Boolean.class),

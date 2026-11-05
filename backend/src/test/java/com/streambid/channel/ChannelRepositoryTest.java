@@ -431,6 +431,35 @@ class ChannelRepositoryTest {
         assertThat(listings.setOwned(channel.id(), channel.userId(), false).orElseThrow().listed()).isFalse();
         assertThat(channels.find(channel.id())).isPresent();
     }
+    @Test
+    void listingApiIsOwnerOnlyAndDisconnectClearsVisibility() throws Exception {
+        var channel = channelForRefresh("listing-api@example.com");
+        users.save(new UserAccount(UUID.randomUUID(), "listing-foreign@example.com", "hash", "Foreign"));
+        String path = "/api/channels/" + channel.id() + "/listing";
+        mvc.perform(get(path).with(user("listing-api@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.listed").value(false));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-foreign@example.com")).with(csrf()).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).with(csrf()).contentType("application/json").content("{}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).with(csrf()).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.listed").value(true));
+        disconnectService.disconnect(channel.id(), "listing-api@example.com");
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).with(csrf()).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isConflict());
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+    }
     private ConnectedChannel channelForRefresh(String email) {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, email, "hash", "Refresh"));

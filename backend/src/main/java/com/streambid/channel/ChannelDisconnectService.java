@@ -13,11 +13,13 @@ public class ChannelDisconnectService {
     private final ChannelRepository channels;
     private final ChannelCredentialsRepository credentials;
     private final UserRepository users;
+    private final ChannelListingRepository listings;
 
-    public ChannelDisconnectService(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users) {
+    public ChannelDisconnectService(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users, ChannelListingRepository listings) {
         this.channels = channels;
         this.credentials = credentials;
         this.users = users;
+        this.listings = listings;
     }
 
     @Transactional
@@ -26,6 +28,7 @@ public class ChannelDisconnectService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
         channels.lockOwned(channelId, user.id())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Channel not found"));
+        listings.hideExisting(channelId);
         credentials.delete(channelId);
     }
 }
