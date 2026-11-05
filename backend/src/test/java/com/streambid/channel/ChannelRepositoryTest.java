@@ -695,6 +695,16 @@ class ChannelRepositoryTest {
                 .andExpect(jsonPath("$.status").value("ACCEPTED")).andExpect(jsonPath("$.version").value(1));
         mvc.perform(post(decision).with(user("application-advertiser@example.com")).with(csrf())
                 .contentType("application/json").content(accept)).andExpect(status().isConflict());
+        String history = "/api/participations/" + saved.id() + "/events";
+        mvc.perform(get(history).with(user("applicant@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("ACCEPTED")).andExpect(jsonPath("$[1].status").value("PENDING"));
+        mvc.perform(get(history).with(user("application-advertiser@example.com")).param("beforeVersion", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].version").value(0));
+        mvc.perform(get(history).with(user("participation-stranger@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(history)).andExpect(status().isUnauthorized());
+        mvc.perform(get(history).with(user("applicant@example.com")).param("beforeVersion", "-1"))
+                .andExpect(status().isBadRequest());
         var invitation = participations.listForActor(invited.userId(), null, 20).getFirst();
         mvc.perform(post("/api/participations/" + invitation.id() + "/decision")
                 .with(user("http-invited@example.com")).with(csrf()).contentType("application/json")

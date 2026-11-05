@@ -32,6 +32,12 @@ public class CampaignParticipationController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .body(requests.list(principal.getName(), after, limit));
     }
+    @GetMapping("/api/participations/{id}/events")
+    public ResponseEntity<List<ParticipationEvent>> history(@PathVariable UUID id, Principal principal,
+            @RequestParam(required = false) Long beforeVersion, @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(requests.history(principal.getName(), id, beforeVersion, limit));
+    }
 
     @PostMapping("/api/campaigns/{id}/applications")
     public ResponseEntity<CampaignParticipation> apply(@PathVariable UUID id, Principal principal,

@@ -71,6 +71,15 @@ public class CampaignParticipationService {
     private UUID actorId(String email) {
         return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
     }
+    @Transactional(readOnly = true)
+    public List<ParticipationEvent> history(String email, UUID id, Long beforeVersion, int limit) {
+        UUID actor = actorId(email);
+        requests.findForActor(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100 || (beforeVersion != null && beforeVersion < 0)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid participation history limit or version");
+        }
+        return events.findForActor(id, actor, beforeVersion, limit);
+    }
     @Transactional
     public CampaignParticipation decide(String email, UUID id, ParticipationDecisionRequest decision) {
         UUID actor = actorId(email);
