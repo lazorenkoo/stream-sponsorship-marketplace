@@ -17,15 +17,18 @@ public class CampaignParticipationService {
     private final ChannelRepository channels;
     private final CampaignDraftService campaigns;
     private final CampaignCatalogRepository catalog;
+    private final ParticipationEventRepository events;
     private final Clock clock = Clock.systemUTC();
 
     public CampaignParticipationService(CampaignParticipationRepository requests, UserRepository users,
-            ChannelRepository channels, CampaignDraftService campaigns, CampaignCatalogRepository catalog) {
+            ChannelRepository channels, CampaignDraftService campaigns, CampaignCatalogRepository catalog,
+            ParticipationEventRepository events) {
         this.requests = requests;
         this.users = users;
         this.channels = channels;
         this.campaigns = campaigns;
         this.catalog = catalog;
+        this.events = events;
     }
 
     @Transactional
@@ -45,8 +48,10 @@ public class CampaignParticipationService {
         var now = clock.instant();
         var request = new CampaignParticipation(UUID.randomUUID(), campaignId, channelId, user.id(), direction,
                 ParticipationStatus.PENDING, 0, now, now);
-        return requests.create(request).orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+        var saved = requests.create(request).orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
                 "Channel is ineligible or already has a request for this campaign"));
+        events.append(saved, user.id());
+        return saved;
     }
     @Transactional(readOnly = true)
     public CampaignParticipation find(String email, UUID id) {
@@ -81,8 +86,10 @@ public class CampaignParticipationService {
             case REJECT -> ParticipationStatus.REJECTED;
             case WITHDRAW -> ParticipationStatus.WITHDRAWN;
         };
-        return requests.decide(request, next, decision.expectedVersion(), clock.instant())
+        var saved = requests.decide(request, next, decision.expectedVersion(), clock.instant())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
                         "Request has changed or is no longer eligible for this action"));
+        events.append(saved, actor);
+        return saved;
     }
 }

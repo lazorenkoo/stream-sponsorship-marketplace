@@ -576,6 +576,13 @@ class ChannelRepositoryTest {
         try {
             var request = participationService.create("participation-race-streamer@example.com", draft.id(), channel.id(),
                     com.streambid.campaign.ParticipationDirection.APPLICATION);
+            database.execute("INSERT INTO participation_events VALUES (?, 1, ?, 'ACCEPTED', CURRENT_TIMESTAMP)", request.id(), owner);
+            assertThatThrownBy(() -> participationService.decide(email, request.id(),
+                    new com.streambid.campaign.ParticipationDecisionRequest(com.streambid.campaign.ParticipationAction.ACCEPT, 0L)))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            database.execute("DELETE FROM participation_events WHERE participation_id = ? AND version = 1", request.id());
+            assertThat(participationService.find(email, request.id()).version()).isZero();
+            assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(1);
             var accept = executor.submit(() -> raceParticipation(barrier, email, request.id(),
                     com.streambid.campaign.ParticipationAction.ACCEPT));
             var withdraw = executor.submit(() -> raceParticipation(barrier, "participation-race-streamer@example.com", request.id(),
@@ -584,11 +591,13 @@ class ChannelRepositoryTest {
                     .containsExactlyInAnyOrder(200, 409);
             var saved = participationService.find(email, request.id());
             assertThat(saved.version()).isEqualTo(1);
+            assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(2);
             assertThat(saved.status()).isIn(com.streambid.campaign.ParticipationStatus.ACCEPTED,
                     com.streambid.campaign.ParticipationStatus.WITHDRAWN);
         } finally {
             executor.shutdownNow();
             assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM participation_events WHERE participation_id IN (SELECT id FROM campaign_participations WHERE campaign_id = ?)", draft.id());
             database.execute("DELETE FROM campaign_participations WHERE campaign_id = ?", draft.id());
             database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", draft.id());
             database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", draft.id());
