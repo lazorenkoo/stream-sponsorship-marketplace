@@ -562,6 +562,13 @@ class ChannelRepositoryTest {
                 .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(otherPlatform.id());
         assertThat(candidates.find(java.util.Set.of(StreamingPlatform.KICK), null, 100))
                 .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(kickChannel.id());
+        var mixedPlatforms = java.util.Set.of(StreamingPlatform.TWITCH, StreamingPlatform.YOUTUBE);
+        var expectedOrder = java.util.stream.Stream.of(first.id(), second.id(), otherPlatform.id())
+                .sorted(java.util.Comparator.comparing(UUID::toString)).toList();
+        var firstPage = candidates.find(mixedPlatforms, null, 2);
+        var secondPage = candidates.find(mixedPlatforms, firstPage.getLast().channelId(), 2);
+        assertThat(java.util.stream.Stream.concat(firstPage.stream(), secondPage.stream())
+                .map(com.streambid.campaign.CampaignCandidate::channelId).toList()).containsExactlyElementsOf(expectedOrder);
         assertThat(candidates.find(java.util.Set.of(), null, 100)).isEmpty();
         assertThat(candidates.find(selected, null, 100)).extracting(com.streambid.campaign.CampaignCandidate::channelId)
                 .doesNotContain(hidden.id(), disconnected.id(), otherPlatform.id());
@@ -624,7 +631,8 @@ class ChannelRepositoryTest {
         listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
         listings.setOwned(second.id(), second.userId(), true).orElseThrow();
         String path = "/api/campaigns/" + campaign.id() + "/candidates";
-        var ordered = java.util.stream.Stream.of(visible.id(), second.id()).sorted().toList();
+        var ordered = java.util.stream.Stream.of(visible.id(), second.id())
+                .sorted(java.util.Comparator.comparing(UUID::toString)).toList();
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("limit", "1"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1))
                 .andExpect(jsonPath("$.hasMore").value(true))
