@@ -27,12 +27,14 @@ class CampaignCandidateTest {
         var campaignId = UUID.randomUUID();
         var candidate = new CampaignCandidate(UUID.randomUUID(), StreamingPlatform.TWITCH, "Streamer");
         var mutable = new ArrayList<>(java.util.List.of(candidate));
-        var preview = new CampaignCandidatePreview(campaignId, 0, mutable);
+        var preview = new CampaignCandidatePreview(campaignId, 0, mutable, null, false);
         mutable.clear();
         assertThat(preview.candidates()).containsExactly(candidate);
-        assertThatThrownBy(() -> new CampaignCandidatePreview(null, 0, java.util.List.of()))
+        assertThatThrownBy(() -> new CampaignCandidatePreview(null, 0, java.util.List.of(), null, false))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, -1, java.util.List.of()))
+        assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, -1, java.util.List.of(), null, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CampaignCandidatePreview(campaignId, 0, java.util.List.of(), null, true))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

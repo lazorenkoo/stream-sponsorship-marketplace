@@ -562,7 +562,7 @@ class ChannelRepositoryTest {
         assertThat(candidates.find(selected, null, 100)).extracting(com.streambid.campaign.CampaignCandidate::channelId)
                 .doesNotContain(hidden.id(), disconnected.id(), otherPlatform.id());
         assertThatThrownBy(() -> candidates.find(selected, null, 0)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> candidates.find(selected, null, 101)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> candidates.find(selected, null, 102)).isInstanceOf(IllegalArgumentException.class);
     }
     @Autowired com.streambid.campaign.CampaignDraftService campaignDrafts;
     @Autowired com.streambid.campaign.CampaignTargetingService campaignTargets;
@@ -609,6 +609,7 @@ class ChannelRepositoryTest {
     @Test
     void candidatePreviewCursorEndsAndUnlistingRemovesChannel() throws Exception {
         var visible = channelForRefresh("preview-cursor-channel@example.com");
+        var second = channelForRefresh("preview-cursor-second@example.com");
         UUID advertiser = UUID.randomUUID();
         users.save(new UserAccount(advertiser, "preview-cursor-owner@example.com", "hash", "Advertiser"));
         users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
@@ -617,14 +618,23 @@ class ChannelRepositoryTest {
         campaignTargets.replace("preview-cursor-owner@example.com", campaign.id(),
                 new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.TWITCH), 0L));
         listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
+        listings.setOwned(second.id(), second.userId(), true).orElseThrow();
         String path = "/api/campaigns/" + campaign.id() + "/candidates";
+        var ordered = java.util.stream.Stream.of(visible.id(), second.id()).sorted().toList();
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("limit", "1"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1));
-        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", visible.id().toString()))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1))
+                .andExpect(jsonPath("$.hasMore").value(true))
+                .andExpect(jsonPath("$.nextCursor").value(ordered.getFirst().toString()));
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
+                        .param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1))
+                .andExpect(jsonPath("$.candidates[0].channelId").value(ordered.getLast().toString()))
+                .andExpect(jsonPath("$.hasMore").value(false)).andExpect(jsonPath("$.nextCursor").doesNotExist());
         listings.setOwned(visible.id(), visible.userId(), false).orElseThrow();
+        listings.setOwned(second.id(), second.userId(), false).orElseThrow();
         mvc.perform(get(path).with(user("preview-cursor-owner@example.com")))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0))
+                .andExpect(jsonPath("$.hasMore").value(false));
     }
 
     @Test

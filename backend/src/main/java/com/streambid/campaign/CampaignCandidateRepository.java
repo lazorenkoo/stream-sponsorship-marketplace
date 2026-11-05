@@ -18,8 +18,8 @@ public class CampaignCandidateRepository {
 
     public List<CampaignCandidate> find(Set<StreamingPlatform> selected, UUID after, int limit) {
         var platforms = Set.copyOf(selected);
-        if (limit < 1 || limit > 100) {
-            throw new IllegalArgumentException("Candidate limit must be between 1 and 100");
+        if (limit < 1 || limit > 101) {
+            throw new IllegalArgumentException("Candidate query limit must be between 1 and 101");
         }
         if (platforms.isEmpty()) {
             return List.of();

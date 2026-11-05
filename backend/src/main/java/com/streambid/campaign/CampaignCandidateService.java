@@ -1,5 +1,6 @@
 package com.streambid.campaign;
 
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,10 @@ public class CampaignCandidateService {
         }
         var selected = targeting.readOwned(id, campaign.advertiserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        return new CampaignCandidatePreview(id, campaign.version(), candidates.find(selected.platforms(), after, limit));
+        var rows = candidates.find(selected.platforms(), after, limit + 1);
+        boolean hasMore = rows.size() > limit;
+        var page = List.copyOf(rows.subList(0, Math.min(rows.size(), limit)));
+        UUID nextCursor = hasMore ? page.getLast().channelId() : null;
+        return new CampaignCandidatePreview(id, campaign.version(), page, nextCursor, hasMore);
     }
 }
