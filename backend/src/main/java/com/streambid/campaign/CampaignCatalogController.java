@@ -22,11 +22,12 @@ public class CampaignCatalogController {
 
     @GetMapping("/api/catalog/campaigns")
     public ResponseEntity<List<PublishedCampaign>> list(@RequestParam(defaultValue = "20") int limit,
-            @RequestParam(required = false) Instant before, @RequestParam(required = false) UUID beforeId) {
+            @RequestParam(required = false) Instant before, @RequestParam(required = false) UUID beforeId,
+            @RequestParam(required = false) com.streambid.platform.StreamingPlatform platform) {
         if (limit < 1 || limit > 100 || (before == null) != (beforeId == null)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid catalog limit or cursor");
         }
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(campaigns.list(before, beforeId, limit));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(campaigns.list(before, beforeId, limit, platform));
     }
 
     @GetMapping("/api/catalog/campaigns/{id}")
