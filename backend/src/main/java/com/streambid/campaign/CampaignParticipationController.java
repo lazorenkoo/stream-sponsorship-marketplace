@@ -28,9 +28,11 @@ public class CampaignParticipationController {
 
     @GetMapping("/api/participations")
     public ResponseEntity<List<CampaignParticipation>> list(Principal principal,
-            @RequestParam(required = false) UUID after, @RequestParam(defaultValue = "20") int limit) {
+            @RequestParam(required = false) UUID after, @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) UUID campaignId, @RequestParam(required = false) ParticipationStatus status,
+            @RequestParam(required = false) ParticipationDirection direction) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(requests.list(principal.getName(), after, limit));
+                .body(requests.list(principal.getName(), after, limit, campaignId, status, direction));
     }
     @GetMapping("/api/participations/{id}/events")
     public ResponseEntity<List<ParticipationEvent>> history(@PathVariable UUID id, Principal principal,

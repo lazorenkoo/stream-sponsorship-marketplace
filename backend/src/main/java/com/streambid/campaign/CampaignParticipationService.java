@@ -60,12 +60,13 @@ public class CampaignParticipationService {
     }
 
     @Transactional(readOnly = true)
-    public List<CampaignParticipation> list(String email, UUID after, int limit) {
+    public List<CampaignParticipation> list(String email, UUID after, int limit, UUID campaignId,
+            ParticipationStatus status, ParticipationDirection direction) {
         UUID actor = actorId(email);
         if (limit < 1 || limit > 100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Participation limit must be between 1 and 100");
         }
-        return requests.listForActor(actor, after, limit);
+        return requests.listForActor(actor, after, limit, campaignId, status, direction);
     }
 
     private UUID actorId(String email) {

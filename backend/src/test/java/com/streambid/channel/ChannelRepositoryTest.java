@@ -779,6 +779,17 @@ class ChannelRepositoryTest {
         mvc.perform(get(history).with(user("applicant@example.com")).param("beforeVersion", "-1"))
                 .andExpect(status().isBadRequest());
         var invitation = participations.listForActor(invited.userId(), null, 20).getFirst();
+        mvc.perform(get("/api/participations").with(user("application-advertiser@example.com"))
+                .param("campaignId", draft.id().toString()).param("direction", "INVITATION").param("status", "PENDING"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(invitation.id().toString()));
+        mvc.perform(get("/api/participations").with(user("participation-stranger@example.com"))
+                .param("campaignId", draft.id().toString()).param("status", "ACCEPTED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("status", "ACCEPTED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("status", "INVALID"))
+                .andExpect(status().isBadRequest());
         mvc.perform(post("/api/participations/" + invitation.id() + "/decision")
                 .with(user("http-invited@example.com")).with(csrf()).contentType("application/json")
                 .content("{\"action\":\"REJECT\",\"expectedVersion\":0}"))

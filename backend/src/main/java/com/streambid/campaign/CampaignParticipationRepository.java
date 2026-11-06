@@ -73,6 +73,11 @@ public class CampaignParticipationRepository {
     }
 
     public List<CampaignParticipation> listForActor(UUID actor, UUID after, int limit) {
+        return listForActor(actor, after, limit, null, null, null);
+    }
+
+    public List<CampaignParticipation> listForActor(UUID actor, UUID after, int limit, UUID campaignId,
+            ParticipationStatus status, ParticipationDirection direction) {
         if (limit < 1 || limit > 100) {
             throw new IllegalArgumentException("Participation limit must be between 1 and 100");
         }
@@ -80,8 +85,13 @@ public class CampaignParticipationRepository {
                 SELECT p.* FROM campaign_participations p JOIN campaigns c ON c.id = p.campaign_id
                 JOIN connected_channels ch ON ch.id = p.channel_id
                 WHERE (c.advertiser_id = ? OR ch.user_id = ?)
+                  AND (CAST(? AS uuid) IS NULL OR p.campaign_id = ?)
+                  AND (CAST(? AS varchar) IS NULL OR p.status = ?)
+                  AND (CAST(? AS varchar) IS NULL OR p.direction = ?)
                   AND (CAST(? AS uuid) IS NULL OR p.id > CAST(? AS uuid)) ORDER BY p.id LIMIT ?
-                """, actor, actor, after, after, limit).map(this::map);
+                """, actor, actor, campaignId, campaignId, status == null ? null : status.name(),
+                status == null ? null : status.name(), direction == null ? null : direction.name(),
+                direction == null ? null : direction.name(), after, after, limit).map(this::map);
     }
 
     private CampaignParticipation map(Record row) {
