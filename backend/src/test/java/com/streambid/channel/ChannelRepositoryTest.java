@@ -558,6 +558,7 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
     @Autowired com.streambid.campaign.ParticipationEventRepository participationEvents;
     @Autowired com.streambid.campaign.CampaignParticipationService participationService;
+    @Autowired org.springframework.transaction.PlatformTransactionManager participationTransactions;
 
     @Test
     void revokedAuthorizationAndArchivedCampaignBlockAcceptanceButAllowWithdrawal() throws Exception {
@@ -621,6 +622,40 @@ class ChannelRepositoryTest {
             database.execute("DELETE FROM participation_events WHERE participation_id = ? AND version = 1", request.id());
             assertThat(participationService.find(email, request.id()).version()).isZero();
             assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(1);
+            var locked = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var disconnect = executor.submit(() -> new org.springframework.transaction.support.TransactionTemplate(participationTransactions)
+                    .executeWithoutResult(transaction -> {
+                        channels.lockOwned(channel.id(), channel.userId()).orElseThrow();
+                        credentials.delete(channel.id());
+                        locked.countDown();
+                        try {
+                            if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Disconnect timed out");
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(exception);
+                        }
+                    }));
+            assertThat(locked.await(5, TimeUnit.SECONDS)).isTrue();
+            var acceptingDisconnected = executor.submit(() -> {
+                try {
+                    participationService.decide(email, request.id(), new com.streambid.campaign.ParticipationDecisionRequest(
+                            com.streambid.campaign.ParticipationAction.ACCEPT, 0L));
+                    return 200;
+                } catch (ResponseStatusException exception) {
+                    return exception.getStatusCode().value();
+                }
+            });
+            try {
+                assertThatThrownBy(() -> acceptingDisconnected.get(200, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .isInstanceOf(TimeoutException.class);
+            } finally {
+                release.countDown();
+            }
+            disconnect.get(5, TimeUnit.SECONDS);
+            assertThat(acceptingDisconnected.get(5, TimeUnit.SECONDS)).isEqualTo(409);
+            store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                    new TwitchUserTokens("race-access", "race-refresh", java.time.Instant.now().plusSeconds(3600)));
             var accept = executor.submit(() -> raceParticipation(barrier, email, request.id(),
                     com.streambid.campaign.ParticipationAction.ACCEPT));
             var withdraw = executor.submit(() -> raceParticipation(barrier, "participation-race-streamer@example.com", request.id(),

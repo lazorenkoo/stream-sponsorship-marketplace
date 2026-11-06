@@ -48,6 +48,10 @@ public class CampaignParticipationRepository {
                 """, id, actor, actor).map(this::map);
     }
     @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void lockCampaign(UUID campaignId) {
+        database.fetch("SELECT id FROM campaigns WHERE id = ? FOR UPDATE", campaignId);
+    }
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public Optional<CampaignParticipation> decide(CampaignParticipation request, ParticipationStatus next,
             long expectedVersion, java.time.Instant now) {
         return database.fetchOptional("""
@@ -62,7 +66,7 @@ public class CampaignParticipationRepository {
                   AND (? <> 'ACCEPTED' OR EXISTS (
                       SELECT 1 FROM connected_channels ch JOIN channel_credentials t ON t.channel_id = ch.id
                       JOIN campaign_target_platforms target ON target.campaign_id = c.id AND target.platform = ch.platform
-                      WHERE ch.id = p.channel_id))
+                      WHERE ch.id = p.channel_id FOR SHARE OF t))
                 RETURNING p.*
                 """, request.campaignId(), next.name(), OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
                 request.id(), expectedVersion, next.name(), next.name()).map(this::map);

@@ -95,6 +95,13 @@ public class CampaignParticipationService {
             case REJECT -> ParticipationStatus.REJECTED;
             case WITHDRAW -> ParticipationStatus.WITHDRAWN;
         };
+        requests.lockCampaign(request.campaignId());
+        if (next == ParticipationStatus.ACCEPTED) {
+            var channel = channels.find(request.channelId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Channel is unavailable"));
+            channels.lockOwned(channel.id(), channel.userId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Channel is unavailable"));
+        }
         var saved = requests.decide(request, next, decision.expectedVersion(), clock.instant())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
                         "Request has changed or is no longer eligible for this action"));
