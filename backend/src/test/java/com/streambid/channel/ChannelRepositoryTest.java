@@ -537,6 +537,24 @@ class ChannelRepositoryTest {
         }
     }
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
+    @Autowired com.streambid.inventory.AdPlacementRepository placements;
+    @Test
+    void placementRepositoryKeepsOwnershipAndOptimisticVersion() {
+        var channel = channelForRefresh("inventory-owner@example.com");
+        var now = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var placement = new com.streambid.inventory.AdPlacement(UUID.randomUUID(), channel.id(), "Banner", "Top right",
+                320, 180, 3600, new java.math.BigDecimal("200.00"), "PLN", false, 1, false, 0, now, now);
+        assertThat(placements.insertOwned(placement, UUID.randomUUID())).isEmpty();
+        assertThat(placements.insertOwned(placement, channel.userId())).contains(placement);
+        assertThat(placements.findOwned(placement.id(), UUID.randomUUID())).isEmpty();
+        assertThat(placements.listOwned(channel.userId(), null, 20)).containsExactly(placement);
+        assertThat(placements.listOwned(channel.userId(), placement.id(), 20)).isEmpty();
+        var saved = placements.updateOwned(placement, channel.userId(), 0).orElseThrow();
+        assertThat(saved.version()).isEqualTo(1);
+        assertThat(saved.active()).isFalse();
+        assertThat(placements.updateOwned(placement, channel.userId(), 0)).isEmpty();
+        assertThat(placements.updateOwned(placement, UUID.randomUUID(), 1)).isEmpty();
+    }
     @Test
     void streamerCatalogRequiresConsentAndHidesDisconnectedChannels() throws Exception {
         var channel = channelForRefresh("catalog-streamer@example.com");
