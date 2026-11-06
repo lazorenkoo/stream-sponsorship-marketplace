@@ -47,6 +47,28 @@ class CampaignRepositoryTest {
     @Autowired UserRepository users;
 
     @Autowired MockMvc mvc;
+    @Autowired CampaignCatalogRepository catalog;
+    @Test
+    void catalogProvidesContinuationCursorAndLastPageMarker() throws Exception {
+        String email = "catalog-pages@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        for (int i = 0; i < 2; i++) {
+            var draft = drafts.create(email, new CampaignDraftRequest("Campaign " + i, "Brief"));
+            targetingService.replace(email, draft.id(), new CampaignTargetingRequest(
+                    java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
+            drafts.publish(email, draft.id(), new CampaignPublishRequest(1L));
+        }
+        var first = catalog.list(null, null, 1).getFirst();
+        mvc.perform(get("/api/catalog/campaigns").with(user(email)).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasMore").value(true))
+                .andExpect(jsonPath("$.nextBeforeId").value(first.id().toString()));
+        mvc.perform(get("/api/catalog/campaigns").with(user(email)).param("limit", "1")
+                .param("before", first.publishedAt().toString()).param("beforeId", first.id().toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(1))
+                .andExpect(jsonPath("$.hasMore").value(false)).andExpect(jsonPath("$.nextBeforeId").doesNotExist());
+    }
     @Test
     void catalogExposesPublishedCampaignsAndHidesDraftsAndArchivedCampaigns() throws Exception {
         String email = "catalog-owner@example.com";
@@ -66,17 +88,17 @@ class CampaignRepositoryTest {
         mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.platforms[0]").value("TWITCH"));
         mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")).param("platform", "YOUTUBE"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(0));
         mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")).param("platform", "TWITCH"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(1));
         mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(1));
         mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")).param("limit", "101"))
                 .andExpect(status().isBadRequest());
         drafts.archive(email, draft.id(), new CampaignArchiveRequest(2L));
         mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isNotFound());
         mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(0));
     }
     @Test
     void advertiserPublishesConfiguredDraftAndCanArchiveIt() throws Exception {

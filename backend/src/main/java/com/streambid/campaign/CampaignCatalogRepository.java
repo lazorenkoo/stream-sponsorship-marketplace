@@ -24,8 +24,8 @@ public class CampaignCatalogRepository {
 
     public List<PublishedCampaign> list(Instant before, UUID beforeId, int limit,
             com.streambid.platform.StreamingPlatform platform) {
-        if (limit < 1 || limit > 100 || (before == null) != (beforeId == null)) {
-            throw new IllegalArgumentException("Limit must be 1 to 100 and cursor requires time and ID");
+        if (limit < 1 || limit > 101 || (before == null) != (beforeId == null)) {
+            throw new IllegalArgumentException("Query limit must be 1 to 101 and cursor requires time and ID");
         }
         var time = before == null ? null : OffsetDateTime.ofInstant(before, ZoneOffset.UTC);
         return database.fetch("""
