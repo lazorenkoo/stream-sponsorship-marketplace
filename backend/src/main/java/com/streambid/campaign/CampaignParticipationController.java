@@ -31,8 +31,13 @@ public class CampaignParticipationController {
             @RequestParam(required = false) UUID after, @RequestParam(defaultValue = "20") int limit,
             @RequestParam(required = false) UUID campaignId, @RequestParam(required = false) ParticipationStatus status,
             @RequestParam(required = false) ParticipationDirection direction) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(requests.list(principal.getName(), after, limit, campaignId, status, direction));
+        var page = requests.list(principal.getName(), after, limit, campaignId, status, direction);
+        var response = ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .header("X-Has-More", Boolean.toString(page.hasMore()));
+        if (page.nextCursor() != null) {
+            response.header("X-Next-Cursor", page.nextCursor().toString());
+        }
+        return response.body(page.requests());
     }
     @GetMapping("/api/participations/{id}/events")
     public ResponseEntity<List<ParticipationEvent>> history(@PathVariable UUID id, Principal principal,

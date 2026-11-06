@@ -779,6 +779,14 @@ class ChannelRepositoryTest {
         mvc.perform(get(history).with(user("applicant@example.com")).param("beforeVersion", "-1"))
                 .andExpect(status().isBadRequest());
         var invitation = participations.listForActor(invited.userId(), null, 20).getFirst();
+        mvc.perform(get("/api/participations").with(user("application-advertiser@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("X-Has-More", "true"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().exists("X-Next-Cursor"));
+        mvc.perform(get("/api/participations").with(user("http-invited@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("X-Has-More", "false"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().doesNotExist("X-Next-Cursor"));
         mvc.perform(get("/api/participations").with(user("application-advertiser@example.com"))
                 .param("campaignId", draft.id().toString()).param("direction", "INVITATION").param("status", "PENDING"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))

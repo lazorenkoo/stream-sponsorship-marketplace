@@ -78,8 +78,8 @@ public class CampaignParticipationRepository {
 
     public List<CampaignParticipation> listForActor(UUID actor, UUID after, int limit, UUID campaignId,
             ParticipationStatus status, ParticipationDirection direction) {
-        if (limit < 1 || limit > 100) {
-            throw new IllegalArgumentException("Participation limit must be between 1 and 100");
+        if (limit < 1 || limit > 101) {
+            throw new IllegalArgumentException("Participation query limit must be between 1 and 101");
         }
         return database.fetch("""
                 SELECT p.* FROM campaign_participations p JOIN campaigns c ON c.id = p.campaign_id
