@@ -593,9 +593,21 @@ class ChannelRepositoryTest {
                     .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(true))
                     .andExpect(jsonPath("$.version").value(4));
             var remaining = placementService.availability(email, placement.id(), null, 20).getFirst();
+            String catalog = "/api/catalog/placements/" + placement.id();
+            mvc.perform(get(catalog).with(user(email))).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.minimumPrice").value(200)).andExpect(jsonPath("$.currency").value("PLN"))
+                    .andExpect(jsonPath("$.userId").doesNotExist()).andExpect(jsonPath("$.version").doesNotExist());
+            mvc.perform(get("/api/catalog/placements").with(user(email)).param("channelId", channel.id().toString()))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+            listings.setOwned(channel.id(), channel.userId(), false).orElseThrow();
+            mvc.perform(get(catalog).with(user(email))).andExpect(status().isNotFound());
+            listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
             mvc.perform(delete(path + "/" + remaining.id()).with(user(email)).with(csrf()).param("expectedVersion", "4"))
                     .andExpect(status().isConflict());
             credentials.delete(channel.id());
+            mvc.perform(get(catalog).with(user(email))).andExpect(status().isNotFound());
+            mvc.perform(get("/api/catalog/placements").with(user(email)))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
                     .with(user(email)).with(csrf()).contentType("application/json")
                     .content("{\"active\":false,\"expectedVersion\":4}"))
