@@ -540,6 +540,28 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.inventory.AdPlacementRepository placements;
     @Autowired com.streambid.inventory.AdPlacementService placementService;
     @Test
+    void categoryPolicyRequiresOwnerAndCurrentInactiveVersion() throws Exception {
+        String email = "category-policy@example.com";
+        var channel = channelForRefresh(email);
+        channelForRefresh("category-foreign@example.com");
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1));
+        String path = "/api/placements/" + placement.id() + "/categories";
+        mvc.perform(get(path).with(user(email))).andExpect(status().isOk()).andExpect(jsonPath("$.unrestricted").value(true));
+        String body = "{\"unrestricted\":false,\"categories\":[\"gaming\"],\"expectedVersion\":0}";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).with(user(email)).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.unrestricted").value(false)).andExpect(jsonPath("$.categories[0]").value("gaming"));
+        assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).with(user(email)).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isConflict());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).with(user(email)).with(csrf())
+                .contentType("application/json").content("{\"unrestricted\":false,\"categories\":[],\"expectedVersion\":1}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(path).with(user("category-foreign@example.com"))).andExpect(status().isNotFound());
+        assertThat(placementService.categories(email, placement.id()).categories()).containsExactly("gaming");
+    }
+    @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void availabilityApiRejectsOverlapWithoutChangingPlacementVersion() throws Exception {
         String email = "availability-api@example.com";

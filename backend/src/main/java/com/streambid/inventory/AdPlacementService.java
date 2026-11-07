@@ -14,14 +14,16 @@ public class AdPlacementService {
     private final UserRepository users;
     private final PlacementAvailabilityRepository availability;
     private final com.streambid.channel.ChannelRepository channels;
+    private final PlacementCategoryRepository categories;
     private final Clock clock = Clock.systemUTC();
 
     public AdPlacementService(AdPlacementRepository placements, UserRepository users, PlacementAvailabilityRepository availability,
-            com.streambid.channel.ChannelRepository channels) {
+            com.streambid.channel.ChannelRepository channels, PlacementCategoryRepository categories) {
         this.placements = placements;
         this.users = users;
         this.availability = availability;
         this.channels = channels;
+        this.categories = categories;
     }
 
     @Transactional
@@ -56,6 +58,28 @@ public class AdPlacementService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
         return user.id();
+    }
+    @Transactional(readOnly = true)
+    public PlacementCategoryPolicy categories(String email, UUID id) {
+        return categories.findOwned(id, requireStreamer(email))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    @Transactional
+    public PlacementCategoryPolicy setCategories(String email, UUID id, PlacementCategoryRequest request) {
+        UUID owner = requireStreamer(email);
+        placements.lockOwned(id, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        PlacementCategoryPolicy policy;
+        try {
+            policy = new PlacementCategoryPolicy(request.unrestricted(), request.categories());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid advertising category policy");
+        }
+        if (!placements.touchInactive(id, owner, request.expectedVersion(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Placement has changed or is active");
+        }
+        categories.replace(id, policy);
+        return policy;
     }
     @Transactional(readOnly = true)
     public AdPlacement find(String email, UUID id) {

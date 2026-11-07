@@ -45,6 +45,16 @@ public class AdPlacementController {
             @Valid @RequestBody PlacementActivationRequest request) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.setActive(principal.getName(), id, request));
     }
+    @GetMapping("/api/placements/{id}/categories")
+    public ResponseEntity<PlacementCategoryPolicy> categories(@PathVariable UUID id, Principal principal) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.categories(principal.getName(), id));
+    }
+
+    @PutMapping("/api/placements/{id}/categories")
+    public ResponseEntity<PlacementCategoryPolicy> categories(@PathVariable UUID id, Principal principal,
+            @Valid @RequestBody PlacementCategoryRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.setCategories(principal.getName(), id, request));
+    }
 
     @PutMapping("/api/placements/{id}")
     public ResponseEntity<AdPlacement> update(@PathVariable UUID id, Principal principal,
