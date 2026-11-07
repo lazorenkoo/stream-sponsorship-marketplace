@@ -540,6 +540,43 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.inventory.AdPlacementRepository placements;
     @Autowired com.streambid.inventory.AdPlacementService placementService;
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void availabilityApiRejectsOverlapWithoutChangingPlacementVersion() throws Exception {
+        String email = "availability-api@example.com";
+        var channel = channelForRefresh(email);
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1));
+        var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        String path = "/api/placements/" + placement.id() + "/availability";
+        String body = "{\"startsAt\":\"%s\",\"endsAt\":\"%s\",\"expectedVersion\":%d}";
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(other, "availability-api-other@example.com", "hash", "Other"));
+        users.addRole(other, com.streambid.user.UserRole.STREAMER);
+        try {
+            mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                    .content(body.formatted(start, start.plusSeconds(7200), 0))).andExpect(status().isCreated());
+            mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                    .content(body.formatted(start.plusSeconds(3600), start.plusSeconds(10800), 1)))
+                    .andExpect(status().isConflict());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+            assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(1);
+            mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                    .content(body.formatted(start.plusSeconds(7200), start.plusSeconds(10800), 1)))
+                    .andExpect(status().isCreated());
+            mvc.perform(get(path).with(user(email))).andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+            mvc.perform(get(path).with(user("availability-api-other@example.com"))).andExpect(status().isNotFound());
+            mvc.perform(post(path).with(user(email)).contentType("application/json")
+                    .content(body.formatted(start, start.plusSeconds(7200), 2))).andExpect(status().isForbidden());
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        } finally {
+            database.execute("DELETE FROM placement_availability WHERE placement_id = ?", placement.id());
+            database.execute("DELETE FROM ad_placements WHERE id = ?", placement.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id IN (?, ?)", channel.userId(), other);
+        }
+    }
+    @Test
     void ownerAddsAvailabilityAndAdvancesPlacementVersion() {
         String email = "availability-owner@example.com";
         var channel = channelForRefresh(email);
