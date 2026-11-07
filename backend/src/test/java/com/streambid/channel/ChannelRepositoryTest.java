@@ -540,6 +540,50 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.inventory.AdPlacementRepository placements;
     @Autowired com.streambid.inventory.AdPlacementService placementService;
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void simultaneousAvailabilityChangesKeepOneWindowAndOneVersion() throws Exception {
+        String email = "availability-race@example.com";
+        var channel = channelForRefresh(email);
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1));
+        var start = java.time.Instant.now().plusSeconds(86400);
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> raceAvailability(barrier, email, placement.id(), start));
+            var second = executor.submit(() -> raceAvailability(barrier, email, placement.id(), start.plusSeconds(1800)));
+            assertThat(java.util.List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+            var windows = placementService.availability(email, placement.id(), null, 20);
+            assertThat(windows).hasSize(1);
+            var next = windows.getFirst().endsAt();
+            placementService.addAvailability(email, placement.id(),
+                    new com.streambid.inventory.AvailabilityRequest(next, next.plusSeconds(3600), 1L));
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(2);
+            assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(2);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM placement_availability WHERE placement_id = ?", placement.id());
+            database.execute("DELETE FROM ad_placements WHERE id = ?", placement.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id = ?", channel.userId());
+        }
+    }
+
+    private int raceAvailability(java.util.concurrent.CyclicBarrier barrier, String email, UUID id,
+            java.time.Instant start) throws Exception {
+        barrier.await(5, TimeUnit.SECONDS);
+        try {
+            placementService.addAvailability(email, id, new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 0L));
+            return 200;
+        } catch (ResponseStatusException exception) {
+            return exception.getStatusCode().value();
+        }
+    }
+    @Test
     void publicPlacementCatalogShowsAndFiltersAdvertisingRestrictions() throws Exception {
         String email = "category-catalog@example.com";
         var channel = channelForRefresh(email);
