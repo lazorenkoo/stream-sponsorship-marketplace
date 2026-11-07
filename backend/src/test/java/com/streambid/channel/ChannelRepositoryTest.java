@@ -539,6 +539,25 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
     @Autowired com.streambid.inventory.AdPlacementRepository placements;
     @Test
+    void streamerCreatesInactivePlacementWithServerIdentity() throws Exception {
+        var channel = channelForRefresh("inventory-create@example.com");
+        String body = """
+                {"channelId":"%s","title":"Banner","position":"Top right","widthPx":320,"heightPx":180,
+                 "durationSeconds":3600,"minimumPrice":200,"currency":"PLN","negotiable":false,"capacity":1,
+                 "active":true,"version":999}
+                """.formatted(channel.id());
+        mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.active").value(false)).andExpect(jsonPath("$.version").value(0));
+        mvc.perform(post("/api/placements").with(user("inventory-create@example.com"))
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        var other = channelForRefresh("inventory-other@example.com");
+        mvc.perform(post("/api/placements").with(user("inventory-other@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isNotFound());
+        mvc.perform(post("/api/placements").with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+    }
+    @Test
     void placementRepositoryKeepsOwnershipAndOptimisticVersion() {
         var channel = channelForRefresh("inventory-owner@example.com");
         var now = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
