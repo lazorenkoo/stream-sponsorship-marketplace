@@ -546,12 +546,28 @@ class ChannelRepositoryTest {
                  "durationSeconds":3600,"minimumPrice":200,"currency":"PLN","negotiable":false,"capacity":1,
                  "active":true,"version":999}
                 """.formatted(channel.id());
-        mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
+        var result = mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
                 .contentType("application/json").content(body)).andExpect(status().isCreated())
-                .andExpect(jsonPath("$.active").value(false)).andExpect(jsonPath("$.version").value(0));
+                .andExpect(jsonPath("$.active").value(false)).andExpect(jsonPath("$.version").value(0)).andReturn();
+        String path = result.getResponse().getHeader("Location");
+        mvc.perform(get(path).with(user("inventory-create@example.com"))).andExpect(status().isOk());
+        mvc.perform(get("/api/placements").with(user("inventory-create@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        String update = "{\"expectedVersion\":0,\"placement\":" + body.replace("Banner", "Updated banner") + "}";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(update))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Updated banner"))
+                .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.active").value(false));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(update))
+                .andExpect(status().isConflict());
         mvc.perform(post("/api/placements").with(user("inventory-create@example.com"))
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
         var other = channelForRefresh("inventory-other@example.com");
+        mvc.perform(get(path).with(user("inventory-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("inventory-other@example.com")).with(csrf()).contentType("application/json").content(update))
+                .andExpect(status().isNotFound());
         mvc.perform(post("/api/placements").with(user("inventory-other@example.com")).with(csrf())
                 .contentType("application/json").content(body)).andExpect(status().isNotFound());
         mvc.perform(post("/api/placements").with(csrf()).contentType("application/json").content(body))
