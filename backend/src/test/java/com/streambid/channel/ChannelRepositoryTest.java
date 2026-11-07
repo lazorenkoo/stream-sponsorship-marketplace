@@ -540,6 +540,30 @@ class ChannelRepositoryTest {
     @Autowired com.streambid.inventory.AdPlacementRepository placements;
     @Autowired com.streambid.inventory.AdPlacementService placementService;
     @Test
+    void publicPlacementCatalogShowsAndFiltersAdvertisingRestrictions() throws Exception {
+        String email = "category-catalog@example.com";
+        var channel = channelForRefresh(email);
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1));
+        placementService.setCategories(email, placement.id(), new com.streambid.inventory.PlacementCategoryRequest(
+                false, java.util.Set.of("gaming"), 0L));
+        var start = java.time.Instant.now().plusSeconds(86400);
+        placementService.addAvailability(email, placement.id(), new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 1L));
+        placementService.setActive(email, placement.id(), new com.streambid.inventory.PlacementActivationRequest(true, 2L));
+        mvc.perform(get("/api/catalog/placements/" + placement.id()).with(user(email))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.unrestrictedCategories").value(false)).andExpect(jsonPath("$.allowedCategories[0]").value("gaming"));
+        mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "gaming"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "food"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "Invalid Category"))
+                .andExpect(status().isBadRequest());
+        assertThatThrownBy(() -> placementService.setCategories(email, placement.id(),
+                new com.streambid.inventory.PlacementCategoryRequest(true, java.util.Set.of(), 3L)))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+    @Test
     void categoryPolicyRequiresOwnerAndCurrentInactiveVersion() throws Exception {
         String email = "category-policy@example.com";
         var channel = channelForRefresh(email);
