@@ -66,7 +66,7 @@ public class AdPlacementRepository {
                 UPDATE ad_placements p SET title = ?, position = ?, width_px = ?, height_px = ?, duration_seconds = ?,
                     minimum_price = ?, currency = ?, negotiable = ?, capacity = ?,
                     updated_at = GREATEST(p.updated_at, CAST(? AS timestamptz)), version = p.version + 1
-                FROM connected_channels c WHERE p.channel_id = c.id AND c.user_id = ? AND p.id = ? AND p.version = ?
+                FROM connected_channels c WHERE p.channel_id = c.id AND c.user_id = ? AND p.id = ? AND p.version = ? AND NOT p.active
                 RETURNING p.*
                 """, placement.title(), placement.position(), placement.widthPx(), placement.heightPx(), placement.durationSeconds(),
                 placement.minimumPrice(), placement.currency(), placement.negotiable(), placement.capacity(),
@@ -75,6 +75,19 @@ public class AdPlacementRepository {
 
     private OffsetDateTime time(java.time.Instant value) {
         return OffsetDateTime.ofInstant(value, ZoneOffset.UTC);
+    }
+    public Optional<AdPlacement> setActiveOwned(UUID id, UUID owner, boolean active, long expectedVersion, java.time.Instant now) {
+        return database.fetchOptional("""
+                UPDATE ad_placements p SET active = ?, version = p.version + 1,
+                    updated_at = GREATEST(p.updated_at, CAST(? AS timestamptz))
+                FROM connected_channels c WHERE p.channel_id = c.id AND c.user_id = ? AND p.id = ? AND p.version = ?
+                  AND (? = FALSE OR (
+                    EXISTS (SELECT 1 FROM channel_credentials t WHERE t.channel_id = c.id FOR SHARE OF t)
+                    AND EXISTS (SELECT 1 FROM channel_listings l WHERE l.channel_id = c.id AND l.listed)
+                    AND EXISTS (SELECT 1 FROM placement_availability a WHERE a.placement_id = p.id
+                        AND a.ends_at >= GREATEST(a.starts_at, CAST(? AS timestamptz)) + p.duration_seconds * INTERVAL '1 second')))
+                RETURNING p.*
+                """, active, time(now), owner, id, expectedVersion, active, time(now)).map(this::map);
     }
 
     private AdPlacement map(Record row) {

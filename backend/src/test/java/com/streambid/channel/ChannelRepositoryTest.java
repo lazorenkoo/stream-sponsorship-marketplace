@@ -582,14 +582,37 @@ class ChannelRepositoryTest {
             mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "2"))
                     .andExpect(status().isNoContent());
             assertThat(placementService.find(email, placement.id()).version()).isEqualTo(3);
+            String activation = "/api/placements/" + placement.id() + "/activation";
+            String enable = "{\"active\":true,\"expectedVersion\":3}";
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json").content(enable))
+                    .andExpect(status().isConflict());
+            listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json").content(enable))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(true))
+                    .andExpect(jsonPath("$.version").value(4));
+            var remaining = placementService.availability(email, placement.id(), null, 20).getFirst();
+            mvc.perform(delete(path + "/" + remaining.id()).with(user(email)).with(csrf()).param("expectedVersion", "4"))
+                    .andExpect(status().isConflict());
+            credentials.delete(channel.id());
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json")
+                    .content("{\"active\":false,\"expectedVersion\":4}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(false));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json")
+                    .content("{\"active\":true,\"expectedVersion\":5}"))
+                    .andExpect(status().isConflict());
             assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(1);
-            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "3"))
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "5"))
                     .andExpect(status().isNotFound());
-            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(3);
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(5);
         } finally {
             database.execute("DELETE FROM placement_availability WHERE placement_id = ?", placement.id());
             database.execute("DELETE FROM ad_placements WHERE id = ?", placement.id());
             credentials.delete(channel.id());
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
             database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
             database.execute("DELETE FROM users WHERE id IN (?, ?)", channel.userId(), other);
         }

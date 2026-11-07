@@ -13,12 +13,15 @@ public class AdPlacementService {
     private final AdPlacementRepository placements;
     private final UserRepository users;
     private final PlacementAvailabilityRepository availability;
+    private final com.streambid.channel.ChannelRepository channels;
     private final Clock clock = Clock.systemUTC();
 
-    public AdPlacementService(AdPlacementRepository placements, UserRepository users, PlacementAvailabilityRepository availability) {
+    public AdPlacementService(AdPlacementRepository placements, UserRepository users, PlacementAvailabilityRepository availability,
+            com.streambid.channel.ChannelRepository channels) {
         this.placements = placements;
         this.users = users;
         this.availability = availability;
+        this.channels = channels;
     }
 
     @Transactional
@@ -35,6 +38,16 @@ public class AdPlacementService {
         }
         return placements.insertOwned(placement, owner)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Channel not found"));
+    }
+
+    @Transactional
+    public AdPlacement setActive(String email, UUID id, PlacementActivationRequest request) {
+        UUID owner = requireStreamer(email);
+        var placement = placements.findOwned(id, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        channels.lockOwned(placement.channelId(), owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return placements.setActiveOwned(id, owner, request.active(), request.expectedVersion(), clock.instant())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Placement changed or activation requires listing consent, authorization and sufficient availability"));
     }
 
     private UUID requireStreamer(String email) {

@@ -40,6 +40,12 @@ public class AdPlacementController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.list(principal.getName(), after, limit));
     }
 
+    @PutMapping("/api/placements/{id}/activation")
+    public ResponseEntity<AdPlacement> activate(@PathVariable UUID id, Principal principal,
+            @Valid @RequestBody PlacementActivationRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.setActive(principal.getName(), id, request));
+    }
+
     @PutMapping("/api/placements/{id}")
     public ResponseEntity<AdPlacement> update(@PathVariable UUID id, Principal principal,
             @Valid @RequestBody AdPlacementUpdateRequest request) {
