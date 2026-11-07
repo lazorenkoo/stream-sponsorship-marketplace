@@ -11,13 +11,39 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import java.util.UUID;
+import java.util.List;
 
 @RestController
 public class CreativeController {
     private final CreativeUploadService uploads;
+    private final CreativeReadService reads;
 
-    public CreativeController(CreativeUploadService uploads) {
+    public CreativeController(CreativeUploadService uploads, CreativeReadService reads) {
         this.uploads = uploads;
+        this.reads = reads;
+    }
+    @GetMapping("/api/creatives/{id}")
+    public ResponseEntity<CreativeView> find(@PathVariable UUID id, Principal principal) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(CreativeView.from(reads.find(principal.getName(), id)));
+    }
+
+    @GetMapping("/api/creatives")
+    public ResponseEntity<List<CreativeView>> list(Principal principal, @RequestParam(required = false) UUID after,
+            @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(reads.list(principal.getName(), after, limit));
+    }
+
+    @GetMapping("/api/creatives/{id}/content")
+    public ResponseEntity<byte[]> content(@PathVariable UUID id, Principal principal) {
+        var content = reads.content(principal.getName(), id);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .contentType(org.springframework.http.MediaType.parseMediaType(content.format().contentType()))
+                .contentLength(content.bytes().length).header("X-Content-Type-Options", "nosniff")
+                .header("Content-Disposition", "inline; filename=\"" + id + "." + content.format().extension() + "\"")
+                .body(content.bytes());
     }
 
     @PostMapping(value = "/api/creatives", consumes = "multipart/form-data")

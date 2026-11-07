@@ -45,6 +45,8 @@ class UserRepositoryTest {
         users.save(new UserAccount(owner, "creative-http@example.com", "hash", "Advertiser"));
         users.addRole(owner, UserRole.ADVERTISER);
         byte[] bytes = java.util.Base64.getDecoder().decode("UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=");
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(other, "creative-http-other@example.com", "hash", "Other"));
         var file = new org.springframework.mock.web.MockMultipartFile("file", "../../fake.jpg", "text/plain", bytes);
         try {
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
@@ -53,6 +55,20 @@ class UserRepositoryTest {
                     .andExpect(jsonPath("$.widthPx").value(2)).andExpect(jsonPath("$.status").value("PENDING"))
                     .andExpect(jsonPath("$.storageKey").doesNotExist()).andExpect(jsonPath("$.sha256").doesNotExist());
             assertThat(creatives.listOwned(owner, null, 20)).hasSize(1);
+            var saved = creatives.listOwned(owner, null, 20).getFirst();
+            String path = "/api/creatives/" + saved.id();
+            mvc.perform(get(path).with(user("creative-http@example.com"))).andExpect(status().isOk());
+            mvc.perform(get(path).with(user("creative-http-other@example.com"))).andExpect(status().isNotFound());
+            mvc.perform(get("/api/creatives").with(user("creative-http-other@example.com")))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+            org.mockito.Mockito.when(creativeObjects.read(saved.id(), saved.format())).thenReturn(bytes);
+            mvc.perform(get(path + "/content").with(user("creative-http@example.com"))).andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(bytes))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("Content-Type", "image/webp"));
+            mvc.perform(get(path + "/content").with(user("creative-http-other@example.com"))).andExpect(status().isNotFound());
+            org.mockito.Mockito.when(creativeObjects.read(saved.id(), saved.format())).thenReturn(new byte[] {1, 2});
+            mvc.perform(get(path + "/content").with(user("creative-http@example.com")))
+                    .andExpect(status().isServiceUnavailable());
             org.mockito.Mockito.verify(creativeObjects).put(org.mockito.ArgumentMatchers.any(),
                     org.mockito.ArgumentMatchers.eq(com.streambid.creative.CreativeFormat.WEBP), org.mockito.ArgumentMatchers.eq(bytes));
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
@@ -67,7 +83,7 @@ class UserRepositoryTest {
             for (var creative : creatives.listOwned(owner, null, 100)) {
                 creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", creative.id());
             }
-            creativeDatabase.execute("DELETE FROM users WHERE id = ?", owner);
+            creativeDatabase.execute("DELETE FROM users WHERE id IN (?, ?)", owner, other);
         }
     }
     @Autowired org.jooq.DSLContext creativeDatabase;
