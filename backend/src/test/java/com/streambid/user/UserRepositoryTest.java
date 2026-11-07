@@ -36,6 +36,41 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 @Transactional
 class UserRepositoryTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.streambid.creative.S3CreativeStorage creativeObjects;
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void advertiserUploadsActualImageWithoutTrustingFilenameOrMimeType() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "creative-http@example.com", "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        byte[] bytes = java.util.Base64.getDecoder().decode("UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=");
+        var file = new org.springframework.mock.web.MockMultipartFile("file", "../../fake.jpg", "text/plain", bytes);
+        try {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
+                    .file(file).param("title", "Banner").with(user("creative-http@example.com")).with(csrf()))
+                    .andExpect(status().isCreated()).andExpect(jsonPath("$.format").value("WEBP"))
+                    .andExpect(jsonPath("$.widthPx").value(2)).andExpect(jsonPath("$.status").value("PENDING"))
+                    .andExpect(jsonPath("$.storageKey").doesNotExist()).andExpect(jsonPath("$.sha256").doesNotExist());
+            assertThat(creatives.listOwned(owner, null, 20)).hasSize(1);
+            org.mockito.Mockito.verify(creativeObjects).put(org.mockito.ArgumentMatchers.any(),
+                    org.mockito.ArgumentMatchers.eq(com.streambid.creative.CreativeFormat.WEBP), org.mockito.ArgumentMatchers.eq(bytes));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
+                    .file(file).param("title", "Banner").with(user("creative-http@example.com")))
+                    .andExpect(status().isForbidden());
+            var invalid = new org.springframework.mock.web.MockMultipartFile("file", "image.png", "image/png", new byte[0]);
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
+                    .file(invalid).param("title", "Banner").with(user("creative-http@example.com")).with(csrf()))
+                    .andExpect(status().isBadRequest());
+            assertThat(creatives.listOwned(owner, null, 20)).hasSize(1);
+        } finally {
+            for (var creative : creatives.listOwned(owner, null, 100)) {
+                creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", creative.id());
+            }
+            creativeDatabase.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+    @Autowired org.jooq.DSLContext creativeDatabase;
     @Autowired com.streambid.creative.AdCreativeRepository creatives;
     @Test
     void creativeMetadataIsOwnerScopedAndAlwaysStartsPending() {

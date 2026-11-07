@@ -16,6 +16,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ProblemDetail uploadTooLarge() {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.PAYLOAD_TOO_LARGE, "Image upload exceeds the allowed size");
+    }
 
     @ExceptionHandler(ChannelNotFoundException.class)
     public ProblemDetail channelNotFound(ChannelNotFoundException exception) {
