@@ -89,6 +89,26 @@ class UserRepositoryTest {
     @Autowired org.jooq.DSLContext creativeDatabase;
     @Autowired com.streambid.creative.AdCreativeRepository creatives;
     @Test
+    void moderatorDecisionRequiresAdminAndRecordsOneVersionedEvent() {
+        UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
+        users.save(new UserAccount(owner, "review-owner@example.com", "hash", "Advertiser"));
+        users.save(new UserAccount(admin, "review-admin@example.com", "hash", "Admin"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(admin, UserRole.ADMIN);
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, java.time.Instant.now()));
+        assertThat(creatives.pending(null, 20)).containsExactly(creative);
+        assertThat(creatives.review(creative.id(), owner, com.streambid.creative.CreativeStatus.APPROVED, null, 0, java.time.Instant.now())).isEmpty();
+        assertThat(creatives.review(creative.id(), admin, com.streambid.creative.CreativeStatus.APPROVED, null, 99, java.time.Instant.now())).isEmpty();
+        var reviewed = creatives.review(creative.id(), admin, com.streambid.creative.CreativeStatus.APPROVED, null, 0, java.time.Instant.now()).orElseThrow();
+        assertThat(reviewed.version()).isEqualTo(1);
+        assertThat(reviewed.status()).isEqualTo(com.streambid.creative.CreativeStatus.APPROVED);
+        assertThat(creatives.pending(null, 20)).isEmpty();
+        assertThat(creatives.review(creative.id(), admin, com.streambid.creative.CreativeStatus.REJECTED, "Changed mind", 1, java.time.Instant.now())).isEmpty();
+        assertThat(creativeDatabase.fetchCount(org.jooq.impl.DSL.table("creative_review_events"))).isEqualTo(1);
+    }
+    @Test
     void creativeMetadataIsOwnerScopedAndAlwaysStartsPending() {
         UUID owner = UUID.randomUUID();
         users.save(new UserAccount(owner, "creative-owner@example.com", "hash", "Advertiser"));

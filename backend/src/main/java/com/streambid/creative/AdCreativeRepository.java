@@ -33,6 +33,35 @@ public class AdCreativeRepository {
         return database.fetchOptional("SELECT * FROM ad_creatives WHERE id = ? AND advertiser_id = ?", id, advertiser)
                 .map(this::map);
     }
+    public Optional<AdCreative> find(UUID id) {
+        return database.fetchOptional("SELECT * FROM ad_creatives WHERE id = ?", id).map(this::map);
+    }
+
+    public List<AdCreative> pending(UUID after, int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Invalid moderation queue limit");
+        return database.fetch("""
+                SELECT * FROM ad_creatives WHERE status = 'PENDING'
+                  AND (CAST(? AS uuid) IS NULL OR id > ?) ORDER BY id LIMIT ?
+                """, after, after, limit).map(this::map);
+    }
+
+    @Transactional
+    public Optional<AdCreative> review(UUID id, UUID reviewer, CreativeStatus status, String reason, long expectedVersion,
+            java.time.Instant now) {
+        return database.fetchOptional("""
+                WITH reviewed AS (
+                    UPDATE ad_creatives SET status = ?, version = version + 1, reviewed_by = ?,
+                        reviewed_at = GREATEST(created_at, CAST(? AS timestamptz)), rejection_reason = ?
+                    WHERE id = ? AND status = 'PENDING' AND version = ? AND ? IN ('APPROVED', 'REJECTED')
+                      AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ? AND role = 'ADMIN')
+                    RETURNING *
+                ), logged AS (
+                    INSERT INTO creative_review_events(creative_id, version, reviewer_id, status, reason, occurred_at)
+                    SELECT id, version, reviewed_by, status, rejection_reason, reviewed_at FROM reviewed
+                ) SELECT * FROM reviewed
+                """, status.name(), reviewer, OffsetDateTime.ofInstant(now, ZoneOffset.UTC), reason, id, expectedVersion,
+                status.name(), reviewer).map(this::map);
+    }
 
     public List<AdCreative> listOwned(UUID advertiser, UUID after, int limit) {
         if (limit < 1 || limit > 100) {
