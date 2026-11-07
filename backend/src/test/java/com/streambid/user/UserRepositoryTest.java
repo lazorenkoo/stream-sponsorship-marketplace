@@ -36,6 +36,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 @Transactional
 class UserRepositoryTest {
+    @Autowired com.streambid.creative.AdCreativeRepository creatives;
+    @Test
+    void creativeMetadataIsOwnerScopedAndAlwaysStartsPending() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "creative-owner@example.com", "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var input = new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.APPROVED, 99, java.time.Instant.now());
+        var saved = creatives.insertPending(input);
+        assertThat(saved.status()).isEqualTo(com.streambid.creative.CreativeStatus.PENDING);
+        assertThat(saved.version()).isZero();
+        assertThat(saved.storageKey()).isEqualTo(input.storageKey());
+        assertThat(creatives.findOwned(saved.id(), owner)).contains(saved);
+        assertThat(creatives.findOwned(saved.id(), UUID.randomUUID())).isEmpty();
+        assertThat(creatives.listOwned(owner, null, 20)).containsExactly(saved);
+        assertThat(creatives.listOwned(owner, saved.id(), 20)).isEmpty();
+        assertThat(creatives.listOwned(UUID.randomUUID(), null, 20)).isEmpty();
+        assertThatThrownBy(() -> creatives.listOwned(owner, null, 101)).isInstanceOf(IllegalArgumentException.class);
+    }
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17");
