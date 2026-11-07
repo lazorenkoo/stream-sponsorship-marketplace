@@ -34,6 +34,21 @@ public class AdPlacementRepository {
                 WHERE p.id = ? AND c.user_id = ?
                 """, id, owner).map(this::map);
     }
+    public Optional<AdPlacement> lockOwned(UUID id, UUID owner) {
+        return database.fetchOptional("""
+                SELECT p.* FROM ad_placements p JOIN connected_channels c ON c.id = p.channel_id
+                WHERE p.id = ? AND c.user_id = ? FOR UPDATE OF p
+                """, id, owner).map(this::map);
+    }
+
+    public boolean touchInactive(UUID id, UUID owner, long expectedVersion, java.time.Instant now) {
+        return database.execute("""
+                UPDATE ad_placements p SET version = p.version + 1,
+                    updated_at = GREATEST(p.updated_at, CAST(? AS timestamptz))
+                FROM connected_channels c WHERE p.channel_id = c.id AND c.user_id = ?
+                    AND p.id = ? AND p.version = ? AND NOT p.active
+                """, time(now), owner, id, expectedVersion) == 1;
+    }
 
     public List<AdPlacement> listOwned(UUID owner, UUID after, int limit) {
         if (limit < 1 || limit > 100) {

@@ -12,11 +12,13 @@ import org.springframework.web.server.ResponseStatusException;
 public class AdPlacementService {
     private final AdPlacementRepository placements;
     private final UserRepository users;
+    private final PlacementAvailabilityRepository availability;
     private final Clock clock = Clock.systemUTC();
 
-    public AdPlacementService(AdPlacementRepository placements, UserRepository users) {
+    public AdPlacementService(AdPlacementRepository placements, UserRepository users, PlacementAvailabilityRepository availability) {
         this.placements = placements;
         this.users = users;
+        this.availability = availability;
     }
 
     @Transactional
@@ -76,5 +78,34 @@ public class AdPlacementService {
         }
         return placements.updateOwned(changed, owner, update.expectedVersion())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Placement has changed; reload before editing"));
+    }
+    @Transactional
+    public PlacementAvailability addAvailability(String email, UUID id, AvailabilityRequest request) {
+        UUID owner = requireStreamer(email);
+        var placement = placements.lockOwned(id, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        PlacementAvailability window;
+        try {
+            window = new PlacementAvailability(UUID.randomUUID(), id, request.startsAt(), request.endsAt());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Availability end must be after start");
+        }
+        if (!window.startsAt().isAfter(clock.instant())
+                || java.time.Duration.between(window.startsAt(), window.endsAt()).getSeconds() < placement.durationSeconds()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Availability must be in the future and cover placement duration");
+        }
+        if (!placements.touchInactive(id, owner, request.expectedVersion(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Placement has changed or is active");
+        }
+        return availability.insertOwned(window, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<PlacementAvailability> availability(String email, UUID id, java.time.Instant after, int limit) {
+        UUID owner = requireStreamer(email);
+        placements.findOwned(id, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Availability limit must be between 1 and 100");
+        }
+        return availability.listOwned(id, owner, after, limit);
     }
 }

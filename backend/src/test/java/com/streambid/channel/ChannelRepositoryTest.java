@@ -538,6 +538,22 @@ class ChannelRepositoryTest {
     }
     @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
     @Autowired com.streambid.inventory.AdPlacementRepository placements;
+    @Autowired com.streambid.inventory.AdPlacementService placementService;
+    @Test
+    void ownerAddsAvailabilityAndAdvancesPlacementVersion() {
+        String email = "availability-owner@example.com";
+        var channel = channelForRefresh(email);
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1));
+        var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var request = new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 0L);
+        var saved = placementService.addAvailability(email, placement.id(), request);
+        assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+        assertThat(placementService.availability(email, placement.id(), null, 20)).containsExactly(saved);
+        assertThat(placementService.availability(email, placement.id(), start, 20)).isEmpty();
+        assertThatThrownBy(() -> placementService.addAvailability(email, placement.id(), request))
+                .isInstanceOf(ResponseStatusException.class);
+    }
     @Test
     void streamerCreatesInactivePlacementWithServerIdentity() throws Exception {
         var channel = channelForRefresh("inventory-create@example.com");
