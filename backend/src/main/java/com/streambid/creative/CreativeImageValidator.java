@@ -41,7 +41,7 @@ public class CreativeImageValidator {
             } finally {
                 reader.dispose();
             }
-        } catch (IOException exception) {
+        } catch (IOException | IndexOutOfBoundsException exception) {
             throw new IllegalArgumentException("Invalid image data", exception);
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is unavailable", exception);
@@ -50,13 +50,23 @@ public class CreativeImageValidator {
 
     private void requireStatic(byte[] bytes, CreativeFormat format) {
         if (format == CreativeFormat.PNG) {
+            boolean ended = false;
             for (int offset = 8; offset <= bytes.length - 12;) {
                 int size = ByteBuffer.wrap(bytes, offset, 4).getInt();
                 if (size < 0 || size > bytes.length - offset - 12) throw new IllegalArgumentException("Invalid PNG chunk");
                 String chunk = new String(bytes, offset + 4, 4, StandardCharsets.US_ASCII);
                 if (chunk.equals("acTL")) throw new IllegalArgumentException("Animated PNG is unsupported");
+                if (chunk.equals("IEND")) {
+                    if (size != 0 || offset + 12 != bytes.length) throw new IllegalArgumentException("Invalid PNG ending");
+                    ended = true;
+                }
                 offset += size + 12;
             }
+            if (!ended) throw new IllegalArgumentException("Missing PNG ending");
+        }
+        if (format == CreativeFormat.JPEG && (bytes.length < 2 || bytes[bytes.length - 2] != (byte) 0xff
+                || bytes[bytes.length - 1] != (byte) 0xd9)) {
+            throw new IllegalArgumentException("Missing JPEG ending");
         }
         if (format == CreativeFormat.WEBP) {
             long size = Integer.toUnsignedLong(ByteBuffer.wrap(bytes, 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
