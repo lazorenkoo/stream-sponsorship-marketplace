@@ -572,6 +572,32 @@ class ChannelRepositoryTest {
                 .contentType("application/json").content(body)).andExpect(status().isNotFound());
         mvc.perform(post("/api/placements").with(csrf()).contentType("application/json").content(body))
                 .andExpect(status().isUnauthorized());
+        for (String invalid : java.util.List.of(body.replace("\"widthPx\":320", "\"widthPx\":0"),
+                body.replace("\"minimumPrice\":200", "\"minimumPrice\":0.001"),
+                body.replace("\"minimumPrice\":200", "\"minimumPrice\":null"),
+                body.replace("\"currency\":\"PLN\"", "\"currency\":\"pln\""),
+                body.replace("\"capacity\":1", "\"capacity\":0"))) {
+            mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
+                    .contentType("application/json").content(invalid)).andExpect(status().isBadRequest());
+        }
+        for (String invalid : java.util.List.of(update.replace("\"expectedVersion\":0", "\"expectedVersion\":null"),
+                update.replace("\"expectedVersion\":0", "\"expectedVersion\":-1"),
+                update.replace("\"expectedVersion\":0", "\"expectedVersion\":1").replace(channel.id().toString(), other.id().toString()))) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                    .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        UUID advertiser = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "inventory-advertiser@example.com", "hash", "Advertiser"));
+        users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
+        mvc.perform(post("/api/placements").with(user("inventory-advertiser@example.com").roles("STREAMER")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/placements").with(user("inventory-advertiser@example.com").roles("STREAMER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).with(user("inventory-create@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.title").value("Updated banner"));
+        mvc.perform(get("/api/placements").with(user("inventory-create@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
     }
     @Test
     void placementRepositoryKeepsOwnershipAndOptimisticVersion() {
