@@ -108,4 +108,18 @@ public class AdPlacementService {
         }
         return availability.listOwned(id, owner, after, limit);
     }
+    @Transactional
+    public void removeAvailability(String email, UUID placementId, UUID windowId, long expectedVersion) {
+        UUID owner = requireStreamer(email);
+        placements.lockOwned(placementId, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (expectedVersion < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expected version cannot be negative");
+        }
+        if (!placements.touchInactive(placementId, owner, expectedVersion, clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Placement has changed or is active");
+        }
+        if (!availability.deleteOwned(windowId, placementId, owner)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Availability window not found");
+        }
+    }
 }

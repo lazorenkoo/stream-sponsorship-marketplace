@@ -42,4 +42,11 @@ public class PlacementAvailabilityRepository {
                 .map(row -> new PlacementAvailability(row.get("id", UUID.class), row.get("placement_id", UUID.class),
                         row.get("starts_at", OffsetDateTime.class).toInstant(), row.get("ends_at", OffsetDateTime.class).toInstant()));
     }
+    public boolean deleteOwned(UUID id, UUID placementId, UUID owner) {
+        return database.execute("""
+                DELETE FROM placement_availability a USING ad_placements p, connected_channels c
+                WHERE a.placement_id = p.id AND p.channel_id = c.id
+                  AND a.id = ? AND p.id = ? AND c.user_id = ?
+                """, id, placementId, owner) == 1;
+    }
 }

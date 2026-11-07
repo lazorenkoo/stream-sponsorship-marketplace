@@ -44,4 +44,10 @@ public class PlacementAvailabilityController {
         }
         throw exception;
     }
+    @DeleteMapping("/api/placements/{id}/availability/{windowId}")
+    public ResponseEntity<Void> remove(@PathVariable UUID id, @PathVariable UUID windowId, Principal principal,
+            @RequestParam long expectedVersion) {
+        placements.removeAvailability(principal.getName(), id, windowId, expectedVersion);
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+    }
 }

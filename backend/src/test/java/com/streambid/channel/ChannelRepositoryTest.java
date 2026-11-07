@@ -568,6 +568,24 @@ class ChannelRepositoryTest {
             mvc.perform(post(path).with(user(email)).contentType("application/json")
                     .content(body.formatted(start, start.plusSeconds(7200), 2))).andExpect(status().isForbidden());
             mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            var first = placementService.availability(email, placement.id(), null, 20).getFirst();
+            String remove = path + "/" + first.id();
+            mvc.perform(delete(remove).with(user("availability-api-other@example.com")).with(csrf())
+                    .param("expectedVersion", "2")).andExpect(status().isNotFound());
+            mvc.perform(delete(remove).with(user(email)).param("expectedVersion", "2"))
+                    .andExpect(status().isForbidden());
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "0"))
+                    .andExpect(status().isConflict());
+            mvc.perform(delete(path + "/" + UUID.randomUUID()).with(user(email)).with(csrf()).param("expectedVersion", "2"))
+                    .andExpect(status().isNotFound());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(2);
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "2"))
+                    .andExpect(status().isNoContent());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(3);
+            assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(1);
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "3"))
+                    .andExpect(status().isNotFound());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(3);
         } finally {
             database.execute("DELETE FROM placement_availability WHERE placement_id = ?", placement.id());
             database.execute("DELETE FROM ad_placements WHERE id = ?", placement.id());
