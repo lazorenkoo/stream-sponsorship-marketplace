@@ -73,6 +73,45 @@ class CreativeUploadIntegrationTest {
     @Autowired org.jooq.DSLContext database;
     @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
 
+    @Autowired CreativeUploadCleanup cleanup;
+    @Autowired CreativeUploadIntentRepository intents;
+
+    @Test
+    void cleanupDeletesRealOrphanAndPreservesCommittedCreative() throws Exception {
+        UUID owner = UUID.randomUUID(), orphan = UUID.randomUUID(), savedId = UUID.randomUUID();
+        users.save(new UserAccount(owner, "cleanup-storage@example.com", "hash", "Advertiser"));
+        var expired = java.time.Instant.now().minusSeconds(7200);
+        byte[] bytes = java.util.Base64.getDecoder().decode("UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=");
+        try {
+            storage.put(orphan, CreativeFormat.WEBP, bytes);
+            intents.create(orphan, CreativeFormat.WEBP, expired);
+            storage.put(savedId, CreativeFormat.WEBP, bytes);
+            var image = new CreativeImageValidator().validate(bytes);
+            var saved = new AdCreative(savedId, owner, "Preserved", image.format(), image.widthPx(), image.heightPx(),
+                    image.byteSize(), image.sha256(), CreativeStatus.PENDING, 0, expired);
+            creatives.insertPending(saved);
+            // Simulate a recovery record left behind for an already committed creative.
+            intents.create(savedId, CreativeFormat.WEBP, expired);
+            cleanup.runBatch();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> storage.read(orphan, CreativeFormat.WEBP))
+                    .isInstanceOf(software.amazon.awssdk.services.s3.model.S3Exception.class)
+                    .satisfies(failure -> assertThat(((software.amazon.awssdk.services.s3.model.S3Exception) failure).statusCode()).isEqualTo(404));
+            assertThat(storage.read(savedId, CreativeFormat.WEBP)).containsExactly(bytes);
+            assertThat(creatives.find(savedId)).contains(saved);
+            assertThat(database.fetchCount(org.jooq.impl.DSL.table("creative_upload_intents"))).isZero();
+            // Repeating a completed batch must not touch the valid object.
+            cleanup.runBatch();
+            assertThat(storage.read(savedId, CreativeFormat.WEBP)).containsExactly(bytes);
+        } finally {
+            storage.delete(orphan, CreativeFormat.WEBP);
+            storage.delete(savedId, CreativeFormat.WEBP);
+            intents.complete(orphan);
+            intents.complete(savedId);
+            database.execute("DELETE FROM ad_creatives WHERE id = ?", savedId);
+            database.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
     @Test
     void multipartUploadPersistsRealObjectAndPrivateMetadata() throws Exception {
         UUID owner = UUID.randomUUID(), other = UUID.randomUUID(), admin = UUID.randomUUID();
