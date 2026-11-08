@@ -103,7 +103,7 @@ class CreativeUploadIntegrationTest {
             storage.put(orphan, CreativeFormat.WEBP, bytes);
             cleanup.runBatch();
             assertThat(storage.read(orphan, CreativeFormat.WEBP)).containsExactly(bytes);
-            database.execute("UPDATE creative_upload_intents SET cleanup_after = CURRENT_TIMESTAMP WHERE creative_id = ?", orphan);
+            database.execute("UPDATE creative_upload_intents SET cleanup_after = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE creative_id = ?", orphan);
             cleanup.runBatch();
             org.assertj.core.api.Assertions.assertThatThrownBy(() -> storage.read(orphan, CreativeFormat.WEBP))
                     .isInstanceOf(software.amazon.awssdk.services.s3.model.S3Exception.class);
