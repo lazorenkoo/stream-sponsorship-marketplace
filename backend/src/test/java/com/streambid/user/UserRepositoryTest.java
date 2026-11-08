@@ -159,8 +159,20 @@ class UserRepositoryTest {
                 .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("DRAFT")).andExpect(jsonPath("$.terms.rectangle.x").value(1000)).andReturn();
         String location = response.getResponse().getHeader("Location");
+        String send = location + "/send";
+        mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
+        creativeDatabase.execute("""
+                INSERT INTO placement_availability VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '2 hours')
+                """, UUID.randomUUID(), placement);
+        mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
+
         mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk());
-        mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isOk());
         mvc.perform(post("/api/offers").with(user("offer-streamer@example.com").roles("ADVERTISER")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
         mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com"))

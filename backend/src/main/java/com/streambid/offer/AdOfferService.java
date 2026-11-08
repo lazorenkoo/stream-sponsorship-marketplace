@@ -29,6 +29,17 @@ public class AdOfferService {
         return offers.findForParty(id, actor).orElseThrow();
     }
 
+    @Transactional
+    public OfferView send(String email, UUID id, OfferVersionRequest request) {
+        UUID actor = actor(email);
+        if (!users.findRoles(actor).contains("ADVERTISER")) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!offers.sendDraft(id, actor, request.expectedVersion(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Offer changed or placement conditions are unavailable");
+        }
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
     public OfferView find(String email, UUID id) {
         return offers.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }

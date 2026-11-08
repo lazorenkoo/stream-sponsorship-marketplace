@@ -23,6 +23,12 @@ public class AdOfferController {
         return ResponseEntity.created(URI.create("/api/offers/" + saved.id())).cacheControl(CacheControl.noStore()).body(saved);
     }
 
+    @PostMapping("/api/offers/{id}/send")
+    public ResponseEntity<OfferView> send(Principal principal, @PathVariable UUID id,
+            @Valid @RequestBody OfferVersionRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.send(principal.getName(), id, request));
+    }
+
     @GetMapping("/api/offers/{id}")
     public ResponseEntity<OfferView> find(Principal principal, @PathVariable UUID id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.find(principal.getName(), id));

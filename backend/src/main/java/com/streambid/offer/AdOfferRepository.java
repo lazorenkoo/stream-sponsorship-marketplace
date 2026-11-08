@@ -46,6 +46,47 @@ public class AdOfferRepository {
         return Optional.of(id);
     }
 
+    @Transactional
+    public boolean sendDraft(UUID id, UUID actor, long expectedVersion, Instant now) {
+        database.fetch("""
+                SELECT c.id FROM connected_channels c JOIN ad_placements p ON p.channel_id = c.id
+                JOIN ad_offers o ON o.placement_id = p.id WHERE o.id = ? AND o.advertiser_id = ? FOR UPDATE OF c
+                """, id, actor);
+        database.fetch("""
+                SELECT p.id FROM ad_placements p JOIN ad_offers o ON o.placement_id = p.id
+                WHERE o.id = ? AND o.advertiser_id = ? FOR UPDATE OF p
+                """, id, actor);
+        database.fetch("""
+                SELECT a.id FROM ad_creatives a JOIN ad_offer_revisions r ON r.creative_id = a.id
+                JOIN ad_offers o ON o.id = r.offer_id AND o.current_revision = r.revision
+                WHERE o.id = ? AND o.advertiser_id = ? FOR SHARE OF a
+                """, id, actor);
+        database.fetch("""
+                SELECT t.channel_id FROM channel_credentials t JOIN ad_placements p ON p.channel_id = t.channel_id
+                JOIN ad_offers o ON o.placement_id = p.id WHERE o.id = ? AND o.advertiser_id = ? FOR SHARE OF t
+                """, id, actor);
+        return database.execute("""
+                UPDATE ad_offers o SET status = 'PENDING', version = o.version + 1,
+                    updated_at = GREATEST(o.updated_at, CAST(? AS timestamptz))
+                FROM ad_placements p, ad_offer_revisions r, ad_creatives a
+                WHERE o.id = ? AND o.advertiser_id = ? AND o.status = 'DRAFT' AND o.version = ?
+                  AND p.id = o.placement_id AND p.active AND r.offer_id = o.id AND r.revision = o.current_revision
+                  AND a.id = r.creative_id AND a.advertiser_id = o.advertiser_id AND a.status = 'APPROVED'
+                  AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ? AND role = 'ADVERTISER')
+                  AND EXISTS (SELECT 1 FROM channel_credentials WHERE channel_id = p.channel_id)
+                  AND EXISTS (SELECT 1 FROM channel_listings WHERE channel_id = p.channel_id AND listed)
+                  AND p.currency = r.currency
+                  AND (p.negotiable OR (p.minimum_price = r.price AND p.duration_seconds = r.duration_seconds))
+                  AND (p.unrestricted_categories OR EXISTS (SELECT 1 FROM placement_advertising_categories
+                      WHERE placement_id = p.id AND category = r.advertising_category))
+                  AND EXISTS (SELECT 1 FROM placement_availability w WHERE w.placement_id = p.id
+                    AND ((r.mode = 'SCHEDULED' AND r.starts_at >= CAST(? AS timestamptz) AND w.starts_at <= r.starts_at
+                          AND w.ends_at >= r.starts_at + r.duration_seconds * INTERVAL '1 second')
+                      OR (r.mode = 'FLEXIBLE' AND w.ends_at >= GREATEST(w.starts_at, CAST(? AS timestamptz))
+                          + r.duration_seconds * INTERVAL '1 second')))
+                """, time(now), id, actor, expectedVersion, actor, time(now), time(now)) == 1;
+    }
+
     public boolean existsForParty(UUID id, UUID actor) {
         return findForParty(id, actor).isPresent();
     }
