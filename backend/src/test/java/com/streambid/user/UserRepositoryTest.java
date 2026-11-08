@@ -107,7 +107,7 @@ class UserRepositoryTest {
 
     @Autowired com.streambid.offer.AdOfferRepository offers;
     @Test
-    void offerDraftStoresRectangleAndRejectsUnapprovedCreative() {
+    void offerDraftStoresRectangleAndRejectsUnapprovedCreative() throws Exception {
         UUID advertiser = UUID.randomUUID(), streamer = UUID.randomUUID(), channel = UUID.randomUUID(), placement = UUID.randomUUID();
         users.save(new UserAccount(advertiser, "offer-advertiser@example.com", "hash", "Advertiser"));
         users.save(new UserAccount(streamer, "offer-streamer@example.com", "hash", "Streamer"));
@@ -154,6 +154,20 @@ class UserRepositoryTest {
         assertThat(revision.get("rectangle_width", Integer.class)).isEqualTo(3000);
         assertThat(revision.get("price", java.math.BigDecimal.class)).isEqualByComparingTo("350.00");
         assertThat(offers.createDraft(UUID.randomUUID(), streamer, placement, terms, now)).isEmpty();
+        String body = json.writeValueAsString(new com.streambid.offer.CreateOfferRequest(placement, terms));
+        var response = mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("DRAFT")).andExpect(jsonPath("$.terms.rectangle.x").value(1000)).andReturn();
+        String location = response.getResponse().getHeader("Location");
+        mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk());
+        mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(post("/api/offers").with(user("offer-streamer@example.com").roles("ADVERTISER")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com"))
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("limit", "101"))
+                .andExpect(status().isBadRequest());
+
     }
 
     @Autowired org.springframework.transaction.PlatformTransactionManager creativeTransactions;
