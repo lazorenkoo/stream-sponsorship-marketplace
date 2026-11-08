@@ -191,6 +191,22 @@ class UserRepositoryTest {
 
         mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk());
         mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isOk());
+        UUID sentId = UUID.fromString(location.substring(location.lastIndexOf('/') + 1));
+        var counter = new com.streambid.offer.OfferTerms(creative.id(), new java.math.BigDecimal("400"), "PLN", 3600,
+                com.streambid.offer.OfferMode.FLEXIBLE, null, "gaming", new com.streambid.offer.OfferRectangle(2000, 1000, 3000, 4000));
+        users.addRole(streamer, UserRole.STREAMER);
+        assertThat(offers.counter(sentId, advertiser, 1, counter, now)).isFalse();
+        assertThat(offers.counter(sentId, streamer, 1, counter, now)).isTrue();
+        assertThat(offers.counter(sentId, advertiser, 1, terms, now)).isFalse();
+        assertThat(offers.counter(sentId, streamer, 2, terms, now)).isFalse();
+        var countered = offers.findForParty(sentId, advertiser).orElseThrow();
+        assertThat(countered.status()).isEqualTo(com.streambid.offer.OfferStatus.COUNTERED);
+        assertThat(countered.revision()).isEqualTo(1);
+        assertThat(countered.terms()).isEqualTo(counter);
+        var history = offers.revisionsForParty(sentId, advertiser, null, 20);
+        assertThat(history).hasSize(2);
+        assertThat(history.get(1).terms()).isEqualTo(terms);
+
         mvc.perform(post("/api/offers").with(user("offer-streamer@example.com").roles("ADVERTISER")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
         mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com"))
