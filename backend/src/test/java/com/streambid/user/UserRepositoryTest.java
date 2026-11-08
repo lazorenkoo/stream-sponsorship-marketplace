@@ -89,6 +89,30 @@ class UserRepositoryTest {
     @Autowired org.jooq.DSLContext creativeDatabase;
     @Autowired com.streambid.creative.AdCreativeRepository creatives;
     @Test
+    void moderationHttpRequiresDatabaseAdminAndValidReason() throws Exception {
+        UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
+        users.save(new UserAccount(owner, "review-http-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(admin, "review-http-admin@example.com", "hash", "Admin"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(admin, UserRole.ADMIN);
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, java.time.Instant.now()));
+        String path = "/api/admin/creatives/" + creative.id() + "/review";
+        String decision = "{\"status\":\"REJECTED\",\"reason\":\"Unsupported advertising content\",\"expectedVersion\":0}";
+        mvc.perform(post(path).with(user("review-http-owner@example.com").roles("ADMIN")).with(csrf())
+                .contentType("application/json").content(decision)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/creatives").with(user("review-http-admin@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(post(path).with(user("review-http-admin@example.com")).with(csrf()).contentType("application/json")
+                .content("{\"status\":\"REJECTED\",\"expectedVersion\":0}")).andExpect(status().isBadRequest());
+        mvc.perform(post(path).with(user("review-http-admin@example.com")).with(csrf())
+                .contentType("application/json").content(decision)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED")).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(path).with(user("review-http-admin@example.com")).with(csrf())
+                .contentType("application/json").content(decision)).andExpect(status().isConflict());
+    }
+    @Test
     void moderatorDecisionRequiresAdminAndRecordsOneVersionedEvent() {
         UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
         users.save(new UserAccount(owner, "review-owner@example.com", "hash", "Advertiser"));
