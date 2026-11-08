@@ -244,12 +244,27 @@ class UserRepositoryTest {
         assertThat(events.getValues("status", String.class)).containsExactly("DRAFT", "PENDING", "PENDING", "COUNTERED", "REJECTED");
         assertThat(events.get(3).get("actor_id", UUID.class)).isEqualTo(streamer);
         assertThat(events.get(4).get("revision", Long.class)).isEqualTo(3);
+        String eventPath = location + "/events";
+        mvc.perform(get(eventPath).with(user("offer-streamer@example.com")).param("limit", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].status").value("REJECTED"))
+                .andExpect(jsonPath("$[0].actorRole").value("ADVERTISER"))
+                .andExpect(jsonPath("$[0].actorId").doesNotExist());
+        mvc.perform(get(eventPath).with(user("offer-advertiser@example.com")).param("beforeVersion", "4"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].version").value(3));
+        mvc.perform(get(eventPath).with(user("offer-advertiser@example.com")).param("beforeVersion", "-1"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(eventPath)).andExpect(status().isUnauthorized());
+        assertThat(offers.eventsForParty(sentId, UUID.randomUUID(), null, 20)).isEmpty();
+
 
         UUID withdrawn = offers.createDraft(UUID.randomUUID(), advertiser, placement, terms, now).orElseThrow();
         mvc.perform(post("/api/offers/" + withdrawn + "/close").with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"WITHDRAW\",\"expectedVersion\":0}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("WITHDRAWN"));
         mvc.perform(get("/api/offers/" + withdrawn).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/offers/" + withdrawn + "/events").with(user("offer-streamer@example.com")))
+                .andExpect(status().isNotFound());
         mvc.perform(get("/api/offers/" + withdrawn + "/revisions").with(user("offer-streamer@example.com")))
                 .andExpect(status().isNotFound());
         mvc.perform(post("/api/offers/" + UUID.randomUUID() + "/counter").with(user("offer-advertiser@example.com")).with(csrf())

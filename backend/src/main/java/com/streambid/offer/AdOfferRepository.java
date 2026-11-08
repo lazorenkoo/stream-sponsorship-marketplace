@@ -172,6 +172,18 @@ public class AdOfferRepository {
         if (inserted != 1) throw new IllegalStateException("Offer participant is required for its transition event");
     }
 
+    public java.util.List<OfferEventView> eventsForParty(UUID id, UUID actor, Long before, int limit) {
+        if (limit < 1 || limit > 100 || (before != null && before < 0)) throw new IllegalArgumentException("Invalid event page");
+        return database.fetch("""
+                SELECT e.*, CASE WHEN e.actor_id = o.advertiser_id THEN 'ADVERTISER' ELSE 'STREAMER' END AS actor_role
+                FROM ad_offer_events e JOIN ad_offers o ON o.id = e.offer_id
+                WHERE o.id = ? AND (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
+                  AND (CAST(? AS bigint) IS NULL OR e.version < ?) ORDER BY e.version DESC LIMIT ?
+                """, id, actor, actor, before, before, limit).map(row -> new OfferEventView(row.get("version", Long.class),
+                        row.get("revision", Long.class), OfferStatus.valueOf(row.get("status", String.class)),
+                        row.get("actor_role", String.class), row.get("occurred_at", OffsetDateTime.class).toInstant()));
+    }
+
     public boolean existsForParty(UUID id, UUID actor) {
         return findForParty(id, actor).isPresent();
     }

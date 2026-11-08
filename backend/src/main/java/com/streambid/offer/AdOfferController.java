@@ -53,6 +53,13 @@ public class AdOfferController {
                 .body(offers.revisions(principal.getName(), id, beforeRevision, limit));
     }
 
+    @GetMapping("/api/offers/{id}/events")
+    public ResponseEntity<List<OfferEventView>> events(Principal principal, @PathVariable UUID id,
+            @RequestParam(required = false) Long beforeVersion, @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(offers.events(principal.getName(), id, beforeVersion, limit));
+    }
+
     @GetMapping("/api/offers")
     public ResponseEntity<List<OfferView>> list(Principal principal, @RequestParam(required = false) UUID after,
             @RequestParam(defaultValue = "20") int limit) {
