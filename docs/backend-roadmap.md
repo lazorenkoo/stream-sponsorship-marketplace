@@ -6,6 +6,17 @@ Source: original StreamBid technical description supplied on November 2, 2026.
 - Java 21, Spring Boot, PostgreSQL, jOOQ, Flyway, security and roles.
 - Twitch OAuth, encrypted credentials, refresh, validation and statistics.
 - Discovery campaigns, two catalogs, applications, invitations and participation history.
+- Owner-managed inventory, availability exclusion constraints, activation and advertising category policies.
+- Validated static images, private S3-compatible uploads, administrator moderation and private review history.
+- Durable upload intents, upload/cleanup fencing and retryable orphan cleanup, tested with PostgreSQL and S3-compatible storage.
+
+## Creative cleanup operation
+Cleanup is disabled by default. Enable `creative.storage.cleanup-enabled=true` with configured private storage.
+The worker claims up to five expired uploads per minute, with a five-minute retry lease.
+Successful orphan deletion retains a durable tombstone for daily rechecks, so a delayed PUT is collected later.
+Tombstones are not automatically purged: this trades retained database rows and daily storage requests for delayed-upload recovery.
+A committed creative is preserved and its recovery intent is removed. Storage failures retain retry state.
+Local S3-compatible tests do not establish production AWS or real Twitch integration readiness.
 
 ## Required before declaring the original backend complete
 1. Streamer advertising inventory: dimensions, position, duration, prices, capacity and availability.

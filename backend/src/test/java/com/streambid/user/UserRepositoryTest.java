@@ -105,6 +105,62 @@ class UserRepositoryTest {
         assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
     }
 
+    @Autowired org.springframework.transaction.PlatformTransactionManager creativeTransactions;
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void uploadCompletionAndCleanupSerializeOnIntentRow() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "upload-race@example.com", "hash", "Advertiser"));
+        var now = java.time.Instant.now().minusSeconds(7200);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(creativeTransactions);
+        try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            for (boolean cleanupFirst : new boolean[] {false, true}) {
+                UUID id = UUID.randomUUID();
+                var creative = new com.streambid.creative.AdCreative(id, owner, "Race",
+                        com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                        com.streambid.creative.CreativeStatus.PENDING, 0, now);
+                uploadIntents.create(id, creative.format(), now);
+                var locked = new java.util.concurrent.CountDownLatch(1);
+                var release = new java.util.concurrent.CountDownLatch(1);
+                var contenderStarted = new java.util.concurrent.CountDownLatch(1);
+                try {
+                    var holder = executor.submit(() -> transaction.executeWithoutResult(status -> {
+                        creativeDatabase.fetch("SELECT creative_id FROM creative_upload_intents WHERE creative_id = ? FOR UPDATE", id);
+                        if (cleanupFirst) uploadIntents.claimExpired(java.time.Instant.now(), 5);
+                        else creatives.finishUpload(creative);
+                        locked.countDown();
+                        try {
+                            if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Release timed out");
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(interrupted);
+                        }
+                    }));
+                    assertThat(locked.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                    var contender = executor.submit(() -> {
+                        contenderStarted.countDown();
+                        if (cleanupFirst) {
+                            assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
+                        } else {
+                            assertThat(uploadIntents.claimExpired(java.time.Instant.now(), 5)).isEmpty();
+                        }
+                    });
+                    assertThat(contenderStarted.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                    release.countDown();
+                    holder.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    contender.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    assertThat(creatives.find(id).isPresent()).isEqualTo(!cleanupFirst);
+                } finally {
+                    release.countDown();
+                    creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", id);
+                    uploadIntents.complete(id);
+                }
+            }
+        } finally {
+            creativeDatabase.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
     @Test
     void deletedUploadTombstonesBackOffAndIgnoreStaleLeaseResults() {
         var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
