@@ -239,6 +239,12 @@ class UserRepositoryTest {
         mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isConflict());
         assertThat(offers.revisionsForParty(sentId, advertiser, null, 20)).hasSize(4);
+        var events = creativeDatabase.fetch("SELECT * FROM ad_offer_events WHERE offer_id = ? ORDER BY version", sentId);
+        assertThat(events.getValues("version", Long.class)).containsExactly(0L, 1L, 3L, 4L, 5L);
+        assertThat(events.getValues("status", String.class)).containsExactly("DRAFT", "PENDING", "PENDING", "COUNTERED", "REJECTED");
+        assertThat(events.get(3).get("actor_id", UUID.class)).isEqualTo(streamer);
+        assertThat(events.get(4).get("revision", Long.class)).isEqualTo(3);
+
         UUID withdrawn = offers.createDraft(UUID.randomUUID(), advertiser, placement, terms, now).orElseThrow();
         mvc.perform(post("/api/offers/" + withdrawn + "/close").with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"WITHDRAW\",\"expectedVersion\":0}"))

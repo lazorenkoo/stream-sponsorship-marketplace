@@ -162,6 +162,16 @@ public class AdOfferRepository {
                 action.name(), actor, actor, actor, actor, actor) == 1;
     }
 
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void recordEvent(UUID id, UUID actor) {
+        int inserted = database.execute("""
+                INSERT INTO ad_offer_events(offer_id, version, revision, actor_id, status, occurred_at)
+                SELECT id, version, current_revision, ?, status, updated_at FROM ad_offers
+                WHERE id = ? AND (advertiser_id = ? OR streamer_id = ?)
+                """, actor, id, actor, actor);
+        if (inserted != 1) throw new IllegalStateException("Offer participant is required for its transition event");
+    }
+
     public boolean existsForParty(UUID id, UUID actor) {
         return findForParty(id, actor).isPresent();
     }

@@ -26,6 +26,7 @@ public class AdOfferService {
         if (!users.findRoles(actor).contains("ADVERTISER")) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         UUID id = offers.createDraft(UUID.randomUUID(), actor, request.placementId(), request.terms(), clock.instant())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Placement or creative is unavailable"));
+        offers.recordEvent(id, actor);
         return offers.findForParty(id, actor).orElseThrow();
     }
 
@@ -37,6 +38,7 @@ public class AdOfferService {
         if (!offers.sendDraft(id, actor, request.expectedVersion(), clock.instant())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Offer changed or placement conditions are unavailable");
         }
+        offers.recordEvent(id, actor);
         return offers.findForParty(id, actor).orElseThrow();
     }
 
@@ -47,6 +49,7 @@ public class AdOfferService {
         if (!offers.counter(id, actor, request.expectedVersion(), request.terms(), clock.instant())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only the current recipient can revise eligible offer terms");
         }
+        offers.recordEvent(id, actor);
         return offers.findForParty(id, actor).orElseThrow();
     }
 
@@ -57,6 +60,7 @@ public class AdOfferService {
         if (!offers.close(id, actor, request.action(), request.expectedVersion(), clock.instant())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Offer changed or action is unavailable to this participant");
         }
+        offers.recordEvent(id, actor);
         return offers.findForParty(id, actor).orElseThrow();
     }
 
