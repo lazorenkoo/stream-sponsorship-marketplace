@@ -34,6 +34,13 @@ public class AdOfferController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.find(principal.getName(), id));
     }
 
+    @GetMapping("/api/offers/{id}/revisions")
+    public ResponseEntity<List<OfferRevisionView>> revisions(Principal principal, @PathVariable UUID id,
+            @RequestParam(required = false) Long beforeRevision, @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(offers.revisions(principal.getName(), id, beforeRevision, limit));
+    }
+
     @GetMapping("/api/offers")
     public ResponseEntity<List<OfferView>> list(Principal principal, @RequestParam(required = false) UUID after,
             @RequestParam(defaultValue = "20") int limit) {

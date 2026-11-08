@@ -148,6 +148,21 @@ class UserRepositoryTest {
         creativeDatabase.execute("UPDATE ad_offers SET status = 'PENDING' WHERE id = ?", id);
         assertThat(offers.findForParty(id, streamer)).isPresent();
         assertThat(offers.listForParty(streamer, null, 20)).hasSize(1);
+        assertThat(offers.revisionsForParty(id, advertiser, null, 20).getFirst().terms()).isEqualTo(terms);
+        assertThat(offers.revisionsForParty(id, UUID.randomUUID(), null, 20)).isEmpty();
+        assertThat(offers.revisionsForParty(id, streamer, 0L, 20)).isEmpty();
+        creativeDatabase.connection(connection -> {
+            var savepoint = connection.setSavepoint();
+            try (var statement = connection.prepareStatement("UPDATE ad_offer_revisions SET price = 1 WHERE offer_id = ?")) {
+                statement.setObject(1, id);
+                assertThatThrownBy(statement::executeUpdate).isInstanceOf(java.sql.SQLException.class);
+            } finally {
+                connection.rollback(savepoint);
+                connection.releaseSavepoint(savepoint);
+            }
+        });
+        assertThat(offers.findForParty(id, advertiser).orElseThrow().terms().price()).isEqualByComparingTo("350.00");
+
         assertThat(offers.existsForParty(id, UUID.randomUUID())).isFalse();
         var revision = creativeDatabase.fetchSingle("SELECT * FROM ad_offer_revisions WHERE offer_id = ?", id);
         assertThat(revision.get("rectangle_x", Integer.class)).isEqualTo(1000);
@@ -159,6 +174,9 @@ class UserRepositoryTest {
                 .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("DRAFT")).andExpect(jsonPath("$.terms.rectangle.x").value(1000)).andReturn();
         String location = response.getResponse().getHeader("Location");
+        mvc.perform(get(location + "/revisions").with(user("offer-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].proposedByRole").value("ADVERTISER"));
+        mvc.perform(get(location + "/revisions").with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
         String send = location + "/send";
         mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());

@@ -50,6 +50,13 @@ public class AdOfferService {
         return offers.listForParty(actor, after, limit);
     }
 
+    public List<OfferRevisionView> revisions(String email, UUID id, Long before, int limit) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100 || (before != null && before < 0)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
+        return offers.revisionsForParty(id, actor, before, limit);
+    }
+
     private UUID actor(String email) {
         return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
     }

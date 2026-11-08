@@ -110,17 +110,31 @@ public class AdOfferRepository {
                   AND (CAST(? AS uuid) IS NULL OR o.id > ?)
                 ORDER BY o.id LIMIT ?
                 """, actor, actor, id, id, after, after, limit).map(row -> {
-            var start = row.get("starts_at", OffsetDateTime.class);
-            var terms = new OfferTerms(row.get("creative_id", UUID.class), row.get("price", java.math.BigDecimal.class),
-                    row.get("currency", String.class), row.get("duration_seconds", Integer.class),
-                    OfferMode.valueOf(row.get("mode", String.class)), start == null ? null : start.toInstant(),
-                    row.get("advertising_category", String.class), new OfferRectangle(row.get("rectangle_x", Integer.class),
-                    row.get("rectangle_y", Integer.class), row.get("rectangle_width", Integer.class), row.get("rectangle_height", Integer.class)));
             return new OfferView(row.get("id", UUID.class), row.get("placement_id", UUID.class),
                     OfferStatus.valueOf(row.get("status", String.class)), row.get("version", Long.class),
-                    row.get("current_revision", Long.class), terms, row.get("offer_created_at", OffsetDateTime.class).toInstant(),
+                    row.get("current_revision", Long.class), terms(row), row.get("offer_created_at", OffsetDateTime.class).toInstant(),
                     row.get("updated_at", OffsetDateTime.class).toInstant());
         });
+    }
+
+    public java.util.List<OfferRevisionView> revisionsForParty(UUID id, UUID actor, Long before, int limit) {
+        if (limit < 1 || limit > 100 || (before != null && before < 0)) throw new IllegalArgumentException("Invalid revision page");
+        return database.fetch("""
+                SELECT r.*, CASE WHEN r.proposed_by = o.advertiser_id THEN 'ADVERTISER' ELSE 'STREAMER' END AS proposer_role
+                FROM ad_offer_revisions r JOIN ad_offers o ON o.id = r.offer_id
+                WHERE o.id = ? AND (o.advertiser_id = ? OR (o.streamer_id = ? AND o.status <> 'DRAFT'))
+                  AND (CAST(? AS bigint) IS NULL OR r.revision < ?) ORDER BY r.revision DESC LIMIT ?
+                """, id, actor, actor, before, before, limit).map(row -> new OfferRevisionView(row.get("revision", Long.class),
+                        row.get("proposer_role", String.class), terms(row), row.get("created_at", OffsetDateTime.class).toInstant()));
+    }
+
+    private OfferTerms terms(org.jooq.Record row) {
+        var start = row.get("starts_at", OffsetDateTime.class);
+        return new OfferTerms(row.get("creative_id", UUID.class), row.get("price", java.math.BigDecimal.class),
+                row.get("currency", String.class), row.get("duration_seconds", Integer.class),
+                OfferMode.valueOf(row.get("mode", String.class)), start == null ? null : start.toInstant(),
+                row.get("advertising_category", String.class), new OfferRectangle(row.get("rectangle_x", Integer.class),
+                row.get("rectangle_y", Integer.class), row.get("rectangle_width", Integer.class), row.get("rectangle_height", Integer.class)));
     }
 
     private OffsetDateTime time(Instant value) {
