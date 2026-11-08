@@ -32,6 +32,7 @@ class OfferConcurrencyTest {
     @Autowired AdCreativeRepository creatives;
     @Autowired AdOfferRepository offers;
     @Autowired AdOfferService service;
+    @Autowired com.streambid.booking.AdBookingRepository bookings;
 
     @Test
     void auditFailureRollsBackRevisionAndConcurrentRepliesHaveOneWinner() throws Exception {
@@ -93,5 +94,17 @@ class OfferConcurrencyTest {
         assertThat(service.find("race-advertiser@example.com", draft.id()).version()).isEqualTo(2);
         assertThat(offers.revisionsForParty(draft.id(), advertiser, null, 20)).hasSize(2);
         assertThat(offers.eventsForParty(draft.id(), advertiser, null, 20)).hasSize(3);
+        assertThat(bookings.accept(draft.id(), advertiser, 2, Instant.now())).isEmpty();
+        var scheduled = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60, OfferMode.SCHEDULED,
+                Instant.now().plusSeconds(300), "gaming", terms.rectangle());
+        var bookable = service.create("race-advertiser@example.com", new CreateOfferRequest(placement, scheduled));
+        service.send("race-advertiser@example.com", bookable.id(), new OfferVersionRequest(0L));
+        assertThat(bookings.accept(bookable.id(), advertiser, 1, Instant.now())).isEmpty();
+        UUID booking = bookings.accept(bookable.id(), streamer, 1, Instant.now()).orElseThrow();
+        assertThat(service.find("race-advertiser@example.com", bookable.id()).status()).isEqualTo(OfferStatus.ACCEPTED);
+        assertThat(database.fetchSingle("SELECT rectangle_width FROM ad_bookings WHERE id = ?", booking)
+                .get("rectangle_width", Integer.class)).isEqualTo(2000);
+        assertThat(bookings.accept(bookable.id(), streamer, 1, Instant.now())).isEmpty();
+
     }
 }
