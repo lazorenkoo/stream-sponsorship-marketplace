@@ -1,6 +1,9 @@
 package com.streambid.offer;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import com.streambid.user.*;
 import com.streambid.creative.*;
 import java.math.BigDecimal;
@@ -114,6 +117,32 @@ class OfferConcurrencyTest {
                 .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("race-advertiser@example.com")))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
         assertThat(bookings.findForParty(booking, UUID.randomUUID())).isEmpty();
+        assertThatThrownBy(() -> database.execute("UPDATE ad_bookings SET rectangle_width = 3000 WHERE id = ?", booking))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(bookings.findForParty(booking, advertiser).orElseThrow().window().rectangle().width()).isEqualTo(2000);
+        assertThatThrownBy(() -> database.execute("""
+                INSERT INTO ad_bookings(id,offer_id,revision,placement_id,channel_id,starts_at,ends_at,
+                    rectangle_x,rectangle_y,rectangle_width,rectangle_height,created_at,updated_at)
+                SELECT ?,offer_id,revision,placement_id,channel_id,starts_at,ends_at,
+                    rectangle_x,rectangle_y,rectangle_width + 1,rectangle_height,created_at,updated_at
+                FROM ad_bookings WHERE id = ?
+                """, UUID.randomUUID(), booking)).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
+                .satisfies(failure -> {
+                    Throwable cause = failure;
+                    while (cause.getCause() != null) cause = cause.getCause();
+                    assertThat(((java.sql.SQLException) cause).getSQLState()).isEqualTo("23514");
+                });
+        users.save(new UserAccount(UUID.randomUUID(), "booking-outsider@example.com", "hash", "Other"));
+        mvc.perform(get(location).with(user("booking-outsider@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(post(acceptPath).with(user("booking-outsider@example.com")).with(csrf())
+                .contentType("application/json").content("{\"expectedVersion\":1}")).andExpect(status().isNotFound());
+        mvc.perform(post(acceptPath).with(user("race-streamer@example.com"))
+                .contentType("application/json").content("{\"expectedVersion\":1}")).andExpect(status().isForbidden());
+        mvc.perform(post(acceptPath).with(user("race-streamer@example.com")).with(csrf())
+                .contentType("application/json").content("{\"expectedVersion\":null}")).andExpect(status().isBadRequest());
+        mvc.perform(post(acceptPath).with(user("race-streamer@example.com")).with(csrf())
+                .contentType("application/json").content("{\"expectedVersion\":1}")).andExpect(status().isConflict());
+
         assertThat(service.find("race-advertiser@example.com", bookable.id()).status()).isEqualTo(OfferStatus.ACCEPTED);
         assertThat(database.fetchSingle("SELECT rectangle_width FROM ad_bookings WHERE id = ?", booking)
                 .get("rectangle_width", Integer.class)).isEqualTo(2000);
@@ -140,6 +169,9 @@ class OfferConcurrencyTest {
                     while (cause.getCause() != null) cause = cause.getCause();
                     assertThat(((java.sql.SQLException) cause).getSQLState()).isEqualTo("23P01");
                 });
+        mvc.perform(post("/api/offers/" + geometryBlocked + "/accept").with(user("race-streamer@example.com")).with(csrf())
+                .contentType("application/json").content("{\"expectedVersion\":1}"))
+                .andExpect(status().isConflict()).andExpect(header().string("Cache-Control", "no-store"));
         var rolledBack = service.find("race-advertiser@example.com", geometryBlocked);
         assertThat(rolledBack.status()).isEqualTo(OfferStatus.PENDING);
         assertThat(rolledBack.version()).isEqualTo(1);
