@@ -40,6 +40,16 @@ public class AdOfferService {
         return offers.findForParty(id, actor).orElseThrow();
     }
 
+    @Transactional
+    public OfferView counter(String email, UUID id, CounterOfferRequest request) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!offers.counter(id, actor, request.expectedVersion(), request.terms(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only the current recipient can revise eligible offer terms");
+        }
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
     public OfferView find(String email, UUID id) {
         return offers.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }

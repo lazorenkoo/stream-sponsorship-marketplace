@@ -207,6 +207,30 @@ class UserRepositoryTest {
         assertThat(history).hasSize(2);
         assertThat(history.get(1).terms()).isEqualTo(terms);
 
+        String counterPath = location + "/counter";
+        String counterBody = json.writeValueAsString(new com.streambid.offer.CounterOfferRequest(2L, terms));
+        mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(counterBody))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(3))
+                .andExpect(jsonPath("$.revision").value(2)).andExpect(jsonPath("$.status").value("PENDING"));
+        mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(counterBody)).andExpect(status().isConflict());
+        String replyBody = json.writeValueAsString(new com.streambid.offer.CounterOfferRequest(3L, counter));
+        mvc.perform(post(counterPath).with(user("offer-streamer@example.com"))
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isForbidden());
+        mvc.perform(post(counterPath).with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":null,\"terms\":null}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post(counterPath).with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(3))
+                .andExpect(jsonPath("$.terms.rectangle.x").value(2000));
+        mvc.perform(get(location + "/revisions").with(user("offer-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].proposedByRole").value("STREAMER"));
+        mvc.perform(post("/api/offers/" + UUID.randomUUID() + "/counter").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isNotFound());
+
         mvc.perform(post("/api/offers").with(user("offer-streamer@example.com").roles("ADVERTISER")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
         mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com"))

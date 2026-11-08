@@ -29,6 +29,12 @@ public class AdOfferController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.send(principal.getName(), id, request));
     }
 
+    @PostMapping("/api/offers/{id}/counter")
+    public ResponseEntity<OfferView> counter(Principal principal, @PathVariable UUID id,
+            @Valid @RequestBody CounterOfferRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.counter(principal.getName(), id, request));
+    }
+
     @GetMapping("/api/offers/{id}")
     public ResponseEntity<OfferView> find(Principal principal, @PathVariable UUID id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.find(principal.getName(), id));
