@@ -217,6 +217,27 @@ class OfferConcurrencyTest {
         String next = mapper.readTree(calendarResult.getResponse().getContentAsString()).get("nextCursor").asText();
         mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to).param("cursor", next))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.reservations.length()").value(3));
+        String cancel = location + "/cancel";
+        String cancellation = "{\"expectedVersion\":0,\"reason\":\" Plans changed \"}";
+        mvc.perform(post(cancel).with(user("booking-outsider@example.com")).with(csrf())
+                .contentType("application/json").content(cancellation)).andExpect(status().isNotFound());
+        mvc.perform(post(cancel).with(user("race-advertiser@example.com"))
+                .contentType("application/json").content(cancellation)).andExpect(status().isForbidden());
+        mvc.perform(post(cancel).with(user("race-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content("{\"expectedVersion\":0,\"reason\":\" \"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post(cancel).with(user("race-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content(cancellation))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(cancel).with(user("race-streamer@example.com")).with(csrf())
+                .contentType("application/json").content(cancellation)).andExpect(status().isConflict());
+        assertThat(service.find("race-advertiser@example.com", bookable.id()).status()).isEqualTo(OfferStatus.ACCEPTED);
+        assertThat(database.fetchSingle("SELECT reason FROM ad_booking_cancellations WHERE booking_id = ?", booking)
+                .get("reason", String.class)).isEqualTo("Plans changed");
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.reservations.length()").value(3));
+        assertThat(bookings.accept(geometryBlocked, streamer, 1, Instant.now())).isPresent();
         database.execute("UPDATE channel_listings SET listed = FALSE WHERE channel_id = ?", channel);
         mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
                 .andExpect(status().isNotFound());

@@ -32,6 +32,20 @@ public class AdBookingService {
         return bookings.findForParty(id, actor).orElseThrow();
     }
 
+    @Transactional
+    public BookingView cancel(String email, UUID id, CancelBookingRequest request) {
+        UUID actor = actor(email);
+        bookings.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        String reason = request.reason().strip();
+        if (reason.isBlank() || reason.length() > 500 || reason.chars().anyMatch(Character::isISOControl)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A printable cancellation reason is required");
+        }
+        if (!bookings.cancel(id, actor, request.expectedVersion(), reason, clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Booking changed, was cancelled or has already started");
+        }
+        return bookings.findForParty(id, actor).orElseThrow();
+    }
+
     public BookingView find(String email, UUID id) {
         return bookings.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }

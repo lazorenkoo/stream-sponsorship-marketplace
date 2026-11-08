@@ -83,6 +83,27 @@ public class AdBookingRepository {
         return Optional.of(id);
     }
 
+    @Transactional
+    public boolean cancel(UUID id, UUID actor, long expectedVersion, String reason, Instant now) {
+        database.fetch("""
+                SELECT c.id FROM connected_channels c JOIN ad_bookings b ON b.channel_id = c.id
+                JOIN ad_offers o ON o.id = b.offer_id
+                WHERE b.id = ? AND (o.advertiser_id = ? OR o.streamer_id = ?) FOR UPDATE OF c
+                """, id, actor, actor);
+        return database.fetchOptional("""
+                WITH cancelled AS (
+                    UPDATE ad_bookings b SET status = 'CANCELLED', version = b.version + 1,
+                        updated_at = GREATEST(b.updated_at, CAST(? AS timestamptz))
+                    FROM ad_offers o WHERE b.offer_id = o.id AND b.id = ? AND b.version = ?
+                      AND b.status = 'BOOKED' AND b.starts_at > GREATEST(CAST(? AS timestamptz), clock_timestamp())
+                      AND (o.advertiser_id = ? OR o.streamer_id = ?) RETURNING b.id, b.version, b.updated_at
+                ), logged AS (
+                    INSERT INTO ad_booking_cancellations(booking_id, version, actor_id, reason, cancelled_at)
+                    SELECT id, version, ?, ?, updated_at FROM cancelled
+                ) SELECT id FROM cancelled
+                """, time(now), id, expectedVersion, time(now), actor, actor, actor, reason).isPresent();
+    }
+
     public Optional<BookingView> findForParty(UUID id, UUID actor) {
         return database.fetchOptional("""
                 SELECT b.* FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id

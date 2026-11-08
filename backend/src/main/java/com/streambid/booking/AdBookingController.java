@@ -24,6 +24,12 @@ public class AdBookingController {
         return ResponseEntity.created(URI.create("/api/bookings/" + saved.id())).cacheControl(CacheControl.noStore()).body(saved);
     }
 
+    @PostMapping("/api/bookings/{id}/cancel")
+    public ResponseEntity<BookingView> cancel(Principal principal, @PathVariable UUID id,
+            @Valid @RequestBody CancelBookingRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(bookings.cancel(principal.getName(), id, request));
+    }
+
     @GetMapping("/api/bookings/{id}")
     public ResponseEntity<BookingView> find(Principal principal, @PathVariable UUID id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(bookings.find(principal.getName(), id));
