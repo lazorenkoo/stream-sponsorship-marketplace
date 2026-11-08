@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Button } from './components/ui/button'
 import { MonitorPlay, Radio, Sparkles } from 'lucide-react'
 
 const catalogs = {
@@ -16,8 +17,8 @@ export default function App() {
           <a href="/" className="flex items-center gap-2 text-xl font-bold tracking-tight"><MonitorPlay className="text-sky-600" />StreamBid</a>
           <nav aria-label="Каталоги" className="flex gap-2">
             {(Object.keys(catalogs) as Array<keyof typeof catalogs>).map(key => (
-              <button key={key} type="button" aria-pressed={selected === key} onClick={() => setSelected(key)}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${selected === key ? 'bg-sky-100 text-sky-800' : 'text-slate-600 hover:bg-slate-100'}`}>{catalogs[key].label}</button>
+              <Button variant="ghost" key={key} type="button" aria-pressed={selected === key} onClick={() => setSelected(key)}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${selected === key ? 'bg-sky-100 text-sky-800' : 'text-slate-600 hover:bg-slate-100'}`}>{catalogs[key].label}</Button>
             ))}
           </nav>
         </div>
