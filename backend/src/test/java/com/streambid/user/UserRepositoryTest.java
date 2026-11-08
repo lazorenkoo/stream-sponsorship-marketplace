@@ -106,6 +106,19 @@ class UserRepositoryTest {
     }
 
     @Test
+    void deletedUploadTombstonesBackOffAndIgnoreStaleLeaseResults() {
+        var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
+        UUID id = UUID.randomUUID();
+        uploadIntents.create(id, com.streambid.creative.CreativeFormat.PNG, now);
+        var first = uploadIntents.claimExpired(now.plusSeconds(3600), 5).getFirst();
+        var second = uploadIntents.claimExpired(now.plusSeconds(3900), 5).getFirst();
+        uploadIntents.retainDeleted(second, now.plusSeconds(3900));
+        uploadIntents.retainDeleted(first, now.plusSeconds(90000));
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(90299), 5)).isEmpty();
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(90300), 5)).hasSize(1);
+    }
+
+    @Test
     void unfinishedUploadCleanupClaimsAreBoundedAndLeased() {
         var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
         UUID id = UUID.randomUUID();

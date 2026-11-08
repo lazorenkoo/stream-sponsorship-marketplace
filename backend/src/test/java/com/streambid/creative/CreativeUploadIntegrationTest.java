@@ -98,7 +98,16 @@ class CreativeUploadIntegrationTest {
                     .satisfies(failure -> assertThat(((software.amazon.awssdk.services.s3.model.S3Exception) failure).statusCode()).isEqualTo(404));
             assertThat(storage.read(savedId, CreativeFormat.WEBP)).containsExactly(bytes);
             assertThat(creatives.find(savedId)).contains(saved);
-            assertThat(database.fetchCount(org.jooq.impl.DSL.table("creative_upload_intents"))).isZero();
+            assertThat(database.fetchCount(org.jooq.impl.DSL.table("creative_upload_intents"))).isEqualTo(1);
+            // A PUT completing after the first delete is collected on the next tombstone sweep.
+            storage.put(orphan, CreativeFormat.WEBP, bytes);
+            cleanup.runBatch();
+            assertThat(storage.read(orphan, CreativeFormat.WEBP)).containsExactly(bytes);
+            database.execute("UPDATE creative_upload_intents SET cleanup_after = CURRENT_TIMESTAMP WHERE creative_id = ?", orphan);
+            cleanup.runBatch();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> storage.read(orphan, CreativeFormat.WEBP))
+                    .isInstanceOf(software.amazon.awssdk.services.s3.model.S3Exception.class);
+            assertThat(database.fetchCount(org.jooq.impl.DSL.table("creative_upload_intents"))).isEqualTo(1);
             // Repeating a completed batch must not touch the valid object.
             cleanup.runBatch();
             assertThat(storage.read(savedId, CreativeFormat.WEBP)).containsExactly(bytes);

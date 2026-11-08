@@ -27,6 +27,14 @@ public class CreativeUploadIntentRepository {
         database.execute("DELETE FROM creative_upload_intents WHERE creative_id = ?", id);
     }
 
+    public void retainDeleted(CreativeUploadIntent intent, Instant now) {
+        // Retain a tombstone: a paused uploader may finish its PUT after deletion.
+        database.execute("""
+                UPDATE creative_upload_intents SET cleanup_after = CAST(? AS timestamptz) + INTERVAL '1 day'
+                WHERE creative_id = ? AND attempts = ?
+                """, time(now), intent.creativeId(), intent.attempts());
+    }
+
     public List<CreativeUploadIntent> claimExpired(Instant now, int limit) {
         if (limit < 1 || limit > 100) throw new IllegalArgumentException("Cleanup batch limit must be between 1 and 100");
         return database.fetch("""

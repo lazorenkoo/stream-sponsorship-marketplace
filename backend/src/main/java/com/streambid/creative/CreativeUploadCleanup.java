@@ -32,8 +32,10 @@ public class CreativeUploadCleanup {
             try {
                 if (creatives.find(intent.creativeId()).isEmpty()) {
                     objects.delete(intent.creativeId(), intent.format());
+                    intents.retainDeleted(intent, clock.instant());
+                } else {
+                    intents.complete(intent.creativeId());
                 }
-                intents.complete(intent.creativeId());
             } catch (RuntimeException failure) {
                 // Keep the durable intent for a later lease; never log storage credentials.
                 log.warn("Creative upload cleanup will retry {} after attempt {}",

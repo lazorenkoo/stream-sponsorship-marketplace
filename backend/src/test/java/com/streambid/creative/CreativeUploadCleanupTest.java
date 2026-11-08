@@ -15,7 +15,7 @@ class CreativeUploadCleanupTest {
     private final CreativeUploadCleanup cleanup = new CreativeUploadCleanup(intents, creatives, provider);
 
     @Test
-    void orphanIsDeletedBeforeItsIntentIsCompleted() {
+    void orphanIsDeletedBeforeItsTombstoneIsRetained() {
         var intent = new CreativeUploadIntent(UUID.randomUUID(), CreativeFormat.WEBP, 1);
         when(provider.getIfAvailable()).thenReturn(objects);
         when(intents.claimExpired(any(), eq(5))).thenReturn(List.of(intent));
@@ -23,7 +23,8 @@ class CreativeUploadCleanupTest {
         cleanup.runBatch();
         var order = inOrder(objects, intents);
         order.verify(objects).delete(intent.creativeId(), intent.format());
-        order.verify(intents).complete(intent.creativeId());
+        order.verify(intents).retainDeleted(eq(intent), any());
+        verify(intents, never()).complete(intent.creativeId());
     }
 
     @Test
