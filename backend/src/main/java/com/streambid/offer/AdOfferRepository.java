@@ -59,6 +59,7 @@ public class AdOfferRepository {
                 """, id, actor);
         return database.execute("""
                 UPDATE ad_offers o SET status = 'PENDING', version = o.version + 1,
+                    sent_at = GREATEST(o.created_at, CAST(? AS timestamptz)),
                     updated_at = GREATEST(o.updated_at, CAST(? AS timestamptz))
                 FROM ad_placements p, ad_offer_revisions r, ad_creatives a
                 WHERE o.id = ? AND o.advertiser_id = ? AND o.status = 'DRAFT' AND o.version = ?
@@ -76,7 +77,7 @@ public class AdOfferRepository {
                           AND w.ends_at >= r.starts_at + r.duration_seconds * INTERVAL '1 second')
                       OR (r.mode = 'FLEXIBLE' AND w.ends_at >= GREATEST(w.starts_at, CAST(? AS timestamptz))
                           + r.duration_seconds * INTERVAL '1 second')))
-                """, time(now), id, actor, expectedVersion, actor, time(now), time(now)) == 1;
+                """, time(now), time(now), id, actor, expectedVersion, actor, time(now), time(now)) == 1;
     }
 
     @Transactional
@@ -144,6 +145,23 @@ public class AdOfferRepository {
                 rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height());
     }
 
+    @Transactional
+    public boolean close(UUID id, UUID actor, OfferCloseAction action, long expectedVersion, Instant now) {
+        return database.execute("""
+                UPDATE ad_offers o SET status = CASE WHEN ? = 'REJECT' THEN 'REJECTED' ELSE 'WITHDRAWN' END,
+                    version = o.version + 1, updated_at = GREATEST(o.updated_at, CAST(? AS timestamptz))
+                FROM ad_offer_revisions r WHERE o.id = ? AND o.version = ?
+                  AND r.offer_id = o.id AND r.revision = o.current_revision
+                  AND ((? = 'WITHDRAW' AND o.advertiser_id = ? AND o.status IN ('DRAFT', 'PENDING', 'COUNTERED')
+                      AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ? AND role = 'ADVERTISER'))
+                    OR (? = 'REJECT' AND o.status IN ('PENDING', 'COUNTERED') AND r.proposed_by <> ?
+                      AND (o.advertiser_id = ? OR o.streamer_id = ?)
+                      AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ?
+                          AND role = CASE WHEN o.advertiser_id = ? THEN 'ADVERTISER' ELSE 'STREAMER' END)))
+                """, action.name(), time(now), id, expectedVersion, action.name(), actor, actor,
+                action.name(), actor, actor, actor, actor, actor) == 1;
+    }
+
     public boolean existsForParty(UUID id, UUID actor) {
         return findForParty(id, actor).isPresent();
     }
@@ -162,7 +180,7 @@ public class AdOfferRepository {
                 SELECT o.id, o.placement_id, o.status, o.version, o.current_revision,
                     o.created_at AS offer_created_at, o.updated_at, r.*
                 FROM ad_offers o JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
-                WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.status <> 'DRAFT'))
+                WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
                   AND (CAST(? AS uuid) IS NULL OR o.id = ?)
                   AND (CAST(? AS uuid) IS NULL OR o.id > ?)
                 ORDER BY o.id LIMIT ?
@@ -179,7 +197,7 @@ public class AdOfferRepository {
         return database.fetch("""
                 SELECT r.*, CASE WHEN r.proposed_by = o.advertiser_id THEN 'ADVERTISER' ELSE 'STREAMER' END AS proposer_role
                 FROM ad_offer_revisions r JOIN ad_offers o ON o.id = r.offer_id
-                WHERE o.id = ? AND (o.advertiser_id = ? OR (o.streamer_id = ? AND o.status <> 'DRAFT'))
+                WHERE o.id = ? AND (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
                   AND (CAST(? AS bigint) IS NULL OR r.revision < ?) ORDER BY r.revision DESC LIMIT ?
                 """, id, actor, actor, before, before, limit).map(row -> new OfferRevisionView(row.get("revision", Long.class),
                         row.get("proposer_role", String.class), terms(row), row.get("created_at", OffsetDateTime.class).toInstant()));

@@ -50,6 +50,16 @@ public class AdOfferService {
         return offers.findForParty(id, actor).orElseThrow();
     }
 
+    @Transactional
+    public OfferView close(String email, UUID id, CloseOfferRequest request) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!offers.close(id, actor, request.action(), request.expectedVersion(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Offer changed or action is unavailable to this participant");
+        }
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
     public OfferView find(String email, UUID id) {
         return offers.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }

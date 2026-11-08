@@ -35,6 +35,12 @@ public class AdOfferController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.counter(principal.getName(), id, request));
     }
 
+    @PostMapping("/api/offers/{id}/close")
+    public ResponseEntity<OfferView> close(Principal principal, @PathVariable UUID id,
+            @Valid @RequestBody CloseOfferRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.close(principal.getName(), id, request));
+    }
+
     @GetMapping("/api/offers/{id}")
     public ResponseEntity<OfferView> find(Principal principal, @PathVariable UUID id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.find(principal.getName(), id));

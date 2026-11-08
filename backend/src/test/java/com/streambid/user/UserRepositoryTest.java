@@ -145,7 +145,7 @@ class UserRepositoryTest {
         assertThat(offers.listForParty(advertiser, id, 20)).isEmpty();
         assertThat(offers.listForParty(streamer, null, 20)).isEmpty();
         assertThatThrownBy(() -> offers.listForParty(advertiser, null, 101)).isInstanceOf(IllegalArgumentException.class);
-        creativeDatabase.execute("UPDATE ad_offers SET status = 'PENDING' WHERE id = ?", id);
+        creativeDatabase.execute("UPDATE ad_offers SET status = 'PENDING', sent_at = created_at WHERE id = ?", id);
         assertThat(offers.findForParty(id, streamer)).isPresent();
         assertThat(offers.listForParty(streamer, null, 20)).hasSize(1);
         assertThat(offers.revisionsForParty(id, advertiser, null, 20).getFirst().terms()).isEqualTo(terms);
@@ -228,6 +228,24 @@ class UserRepositoryTest {
         mvc.perform(get(location + "/revisions").with(user("offer-advertiser@example.com")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].proposedByRole").value("STREAMER"));
+        String closePath = location + "/close";
+        String reject = "{\"action\":\"REJECT\",\"expectedVersion\":4}";
+        mvc.perform(post(closePath).with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(reject)).andExpect(status().isConflict());
+        mvc.perform(post(closePath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(reject))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.version").value(5));
+        mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isConflict());
+        assertThat(offers.revisionsForParty(sentId, advertiser, null, 20)).hasSize(4);
+        UUID withdrawn = offers.createDraft(UUID.randomUUID(), advertiser, placement, terms, now).orElseThrow();
+        mvc.perform(post("/api/offers/" + withdrawn + "/close").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"WITHDRAW\",\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("WITHDRAWN"));
+        mvc.perform(get("/api/offers/" + withdrawn).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/offers/" + withdrawn + "/revisions").with(user("offer-streamer@example.com")))
+                .andExpect(status().isNotFound());
         mvc.perform(post("/api/offers/" + UUID.randomUUID() + "/counter").with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isNotFound());
 
