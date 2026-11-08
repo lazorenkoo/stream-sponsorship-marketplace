@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Button } from './components/ui/button'
+import { LoginForm } from './components/LoginForm'
+import { useSession } from './lib/use-session'
 import { MonitorPlay, Radio, Sparkles } from 'lucide-react'
 
 const catalogs = {
@@ -10,6 +12,7 @@ const catalogs = {
 export default function App() {
   const [selected, setSelected] = useState<keyof typeof catalogs>('streamers')
   const catalog = catalogs[selected]
+  const auth = useSession()
   return (
     <div className="min-h-screen bg-sky-50/60 text-slate-900">
       <header className="border-b border-sky-100 bg-white/90">
@@ -21,6 +24,12 @@ export default function App() {
                 className={`rounded-full px-4 py-2 text-sm font-medium transition ${selected === key ? 'bg-sky-100 text-sky-800' : 'text-slate-600 hover:bg-slate-100'}`}>{catalogs[key].label}</Button>
             ))}
           </nav>
+          <div className="flex items-center gap-3 text-sm">
+            {auth.loading ? <span role="status" className="text-slate-500">Проверяем вход…</span> : auth.session ? <>
+              <span className="max-w-40 truncate font-medium">{auth.session.displayName}</span>
+              <Button variant="outline" size="sm" onClick={auth.signOut} disabled={auth.signingOut}>{auth.signingOut ? 'Выходим…' : 'Выйти'}</Button>
+            </> : !auth.error && <Button asChild variant="outline" size="sm"><a href="#login">Войти</a></Button>}
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-12 md:py-20">
@@ -29,9 +38,11 @@ export default function App() {
           <h1 id="catalog-title" className="text-4xl leading-tight font-semibold tracking-tight md:text-6xl">{catalog.title}</h1>
           <p className="mt-5 max-w-xl text-lg leading-relaxed text-slate-600">{catalog.description}</p>
         </section>
+        {auth.error && <div role="alert" className="mt-8 flex flex-wrap items-center gap-4 rounded-xl bg-red-50 p-4 text-sm text-red-800">{auth.error}<Button variant="outline" onClick={auth.retry}>Повторить</Button></div>}
+        {!auth.loading && !auth.error && !auth.session && <LoginForm onSuccess={auth.setSession} />}
         <section aria-label={catalog.label} className="mt-12 rounded-3xl border border-sky-100 bg-white p-8 shadow-sm md:p-12">
           <h2 className="flex items-center gap-3 text-xl font-semibold"><Radio className="text-sky-600" />{catalog.label}</h2>
-          <p className="mt-4 max-w-xl leading-relaxed text-slate-500">Войдите в аккаунт, чтобы просматривать каталог и согласовывать размещения.</p>
+          <p className="mt-4 max-w-xl leading-relaxed text-slate-500">{auth.session ? 'Выберите канал или предложение бренда для следующего размещения.' : 'Войдите в аккаунт, чтобы просматривать каталог и согласовывать размещения.'}</p>
         </section>
       </main>
     </div>
