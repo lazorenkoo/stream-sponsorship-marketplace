@@ -38,6 +38,7 @@ class OfferConcurrencyTest {
     @Autowired AdOfferRepository offers;
     @Autowired AdOfferService service;
     @Autowired com.streambid.booking.AdBookingRepository bookings;
+    @Autowired com.streambid.booking.AdBookingService bookingService;
 
     @Test
     void auditFailureRollsBackRevisionAndConcurrentRepliesHaveOneWinner() throws Exception {
@@ -237,7 +238,39 @@ class OfferConcurrencyTest {
                 .get("reason", String.class)).isEqualTo("Plans changed");
         mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.reservations.length()").value(3));
-        assertThat(bookings.accept(geometryBlocked, streamer, 1, Instant.now())).isPresent();
+        mvc.perform(get(location + "/cancellation").with(user("race-streamer@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.reason").value("Plans changed"))
+                .andExpect(jsonPath("$.actorRole").value("ADVERTISER")).andExpect(jsonPath("$.actorId").doesNotExist());
+        mvc.perform(get(location + "/cancellation").with(user("booking-outsider@example.com"))).andExpect(status().isNotFound());
+        UUID replacement = bookings.accept(geometryBlocked, streamer, 1, Instant.now()).orElseThrow();
+        assertThat(bookings.cancel(replacement, streamer, 0, "Too late", Instant.now().plusSeconds(7200))).isFalse();
+        database.execute("INSERT INTO ad_booking_cancellations VALUES (?,1,?,'Injected collision',CURRENT_TIMESTAMP)", replacement, streamer);
+        var cancelRequest = new com.streambid.booking.CancelBookingRequest(0L, "Streamer unavailable");
+        assertThatThrownBy(() -> bookingService.cancel("race-streamer@example.com", replacement, cancelRequest))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(bookings.findForParty(replacement, advertiser).orElseThrow().status()).isEqualTo("BOOKED");
+        assertThat(bookings.findForParty(replacement, advertiser).orElseThrow().version()).isZero();
+        database.execute("DELETE FROM ad_booking_cancellations WHERE booking_id = ?", replacement);
+        var cancelBarrier = new CyclicBarrier(2);
+        Callable<Integer> cancelReply = () -> {
+            cancelBarrier.await(5, TimeUnit.SECONDS);
+            try {
+                bookingService.cancel("race-streamer@example.com", replacement, cancelRequest);
+                return 200;
+            } catch (ResponseStatusException conflict) {
+                return conflict.getStatusCode().value();
+            }
+        };
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var firstCancel = executor.submit(cancelReply);
+            var secondCancel = executor.submit(cancelReply);
+            assertThat(java.util.List.of(firstCancel.get(10, TimeUnit.SECONDS), secondCancel.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+        }
+        assertThat(bookings.cancellationForParty(replacement, advertiser).orElseThrow().actorRole()).isEqualTo("STREAMER");
+        assertThat(database.fetchSingle("SELECT count(*) AS total FROM ad_booking_cancellations WHERE booking_id = ?", replacement)
+                .get("total", Long.class)).isEqualTo(1);
+
         database.execute("UPDATE channel_listings SET listed = FALSE WHERE channel_id = ?", channel);
         mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
                 .andExpect(status().isNotFound());

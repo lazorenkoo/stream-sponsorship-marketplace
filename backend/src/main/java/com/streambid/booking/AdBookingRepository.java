@@ -104,6 +104,17 @@ public class AdBookingRepository {
                 """, time(now), id, expectedVersion, time(now), actor, actor, actor, reason).isPresent();
     }
 
+    public Optional<BookingCancellationView> cancellationForParty(UUID id, UUID actor) {
+        return database.fetchOptional("""
+                SELECT c.version, c.reason, c.cancelled_at,
+                    CASE WHEN c.actor_id = o.advertiser_id THEN 'ADVERTISER' ELSE 'STREAMER' END AS actor_role
+                FROM ad_booking_cancellations c JOIN ad_bookings b ON b.id = c.booking_id
+                JOIN ad_offers o ON o.id = b.offer_id WHERE b.id = ? AND (o.advertiser_id = ? OR o.streamer_id = ?)
+                """, id, actor, actor).map(row -> new BookingCancellationView(row.get("version", Long.class),
+                        row.get("actor_role", String.class), row.get("reason", String.class),
+                        row.get("cancelled_at", OffsetDateTime.class).toInstant()));
+    }
+
     public Optional<BookingView> findForParty(UUID id, UUID actor) {
         return database.fetchOptional("""
                 SELECT b.* FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id

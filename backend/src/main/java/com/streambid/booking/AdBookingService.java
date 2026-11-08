@@ -50,6 +50,12 @@ public class AdBookingService {
         return bookings.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
+    public BookingCancellationView cancellation(String email, UUID id) {
+        UUID actor = actor(email);
+        bookings.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return bookings.cancellationForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
     public BookingPage list(String email, UUID after, BookingStatus status, int limit) {
         UUID actor = actor(email);
         if (limit < 1 || limit > 100) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid booking limit");

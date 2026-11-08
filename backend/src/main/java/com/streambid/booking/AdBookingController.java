@@ -35,6 +35,11 @@ public class AdBookingController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(bookings.find(principal.getName(), id));
     }
 
+    @GetMapping("/api/bookings/{id}/cancellation")
+    public ResponseEntity<BookingCancellationView> cancellation(Principal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(bookings.cancellation(principal.getName(), id));
+    }
+
     @GetMapping("/api/bookings")
     public ResponseEntity<BookingPage> list(Principal principal, @RequestParam(required = false) UUID after,
             @RequestParam(required = false) BookingStatus status, @RequestParam(defaultValue = "20") int limit) {
