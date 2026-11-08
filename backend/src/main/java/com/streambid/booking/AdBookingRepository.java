@@ -83,6 +83,18 @@ public class AdBookingRepository {
         return Optional.of(id);
     }
 
+    public Optional<BookingView> findForParty(UUID id, UUID actor) {
+        return database.fetchOptional("""
+                SELECT b.* FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id
+                WHERE b.id = ? AND (o.advertiser_id = ? OR o.streamer_id = ?)
+                """, id, actor, actor).map(row -> new BookingView(row.get("id", UUID.class), row.get("offer_id", UUID.class),
+                row.get("revision", Long.class), row.get("placement_id", UUID.class), row.get("channel_id", UUID.class),
+                new BookingWindow(row.get("starts_at", OffsetDateTime.class).toInstant(), row.get("ends_at", OffsetDateTime.class).toInstant(),
+                        new com.streambid.offer.OfferRectangle(row.get("rectangle_x", Integer.class), row.get("rectangle_y", Integer.class),
+                                row.get("rectangle_width", Integer.class), row.get("rectangle_height", Integer.class))),
+                row.get("status", String.class), row.get("version", Long.class)));
+    }
+
     private OffsetDateTime time(Instant value) {
         return OffsetDateTime.ofInstant(value, ZoneOffset.UTC);
     }

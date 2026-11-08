@@ -18,6 +18,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @Testcontainers
 class OfferConcurrencyTest {
     @Container static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17");
@@ -28,6 +29,7 @@ class OfferConcurrencyTest {
         properties.add("spring.datasource.password", POSTGRES::getPassword);
     }
     @Autowired org.jooq.DSLContext database;
+    @Autowired org.springframework.test.web.servlet.MockMvc mvc;
     @Autowired UserRepository users;
     @Autowired AdCreativeRepository creatives;
     @Autowired AdOfferRepository offers;
@@ -100,7 +102,18 @@ class OfferConcurrencyTest {
         var bookable = service.create("race-advertiser@example.com", new CreateOfferRequest(placement, scheduled));
         service.send("race-advertiser@example.com", bookable.id(), new OfferVersionRequest(0L));
         assertThat(bookings.accept(bookable.id(), advertiser, 1, Instant.now())).isEmpty();
-        UUID booking = bookings.accept(bookable.id(), streamer, 1, Instant.now()).orElseThrow();
+        String acceptPath = "/api/offers/" + bookable.id() + "/accept";
+        var http = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(acceptPath)
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("race-streamer@example.com"))
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf())
+                .contentType("application/json").content("{\"expectedVersion\":1}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated()).andReturn();
+        String location = http.getResponse().getHeader("Location");
+        UUID booking = UUID.fromString(location.substring(location.lastIndexOf('/') + 1));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(location)
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("race-advertiser@example.com")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+        assertThat(bookings.findForParty(booking, UUID.randomUUID())).isEmpty();
         assertThat(service.find("race-advertiser@example.com", bookable.id()).status()).isEqualTo(OfferStatus.ACCEPTED);
         assertThat(database.fetchSingle("SELECT rectangle_width FROM ad_bookings WHERE id = ?", booking)
                 .get("rectangle_width", Integer.class)).isEqualTo(2000);
