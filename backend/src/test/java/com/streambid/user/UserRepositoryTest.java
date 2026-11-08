@@ -105,6 +105,47 @@ class UserRepositoryTest {
         assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
     }
 
+    @Autowired com.streambid.offer.AdOfferRepository offers;
+    @Test
+    void offerDraftStoresRectangleAndRejectsUnapprovedCreative() {
+        UUID advertiser = UUID.randomUUID(), streamer = UUID.randomUUID(), channel = UUID.randomUUID(), placement = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "offer-advertiser@example.com", "hash", "Advertiser"));
+        users.save(new UserAccount(streamer, "offer-streamer@example.com", "hash", "Streamer"));
+        users.addRole(advertiser, UserRole.ADVERTISER);
+        creativeDatabase.execute("""
+                INSERT INTO connected_channels(id, user_id, platform, external_channel_id, display_name, verified_at)
+                VALUES (?, ?, 'TWITCH', ?, 'Offer streamer', CURRENT_TIMESTAMP)
+                """, channel, streamer, channel.toString());
+        creativeDatabase.execute("INSERT INTO channel_listings(channel_id, listed) VALUES (?, TRUE)", channel);
+        creativeDatabase.execute("""
+                INSERT INTO channel_credentials VALUES (?, 'v1.test', 'v1.test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, channel);
+        creativeDatabase.execute("""
+                INSERT INTO ad_placements(id, channel_id, title, position, width_px, height_px, duration_seconds,
+                    minimum_price, currency, negotiable, capacity, active, created_at, updated_at)
+                VALUES (?, ?, 'Banner', 'Custom', 320, 180, 60, 10, 'PLN', TRUE, 1, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, placement, channel);
+        var now = java.time.Instant.now();
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), advertiser, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, now));
+        var terms = new com.streambid.offer.OfferTerms(creative.id(), new java.math.BigDecimal("350"), "PLN", 5400,
+                com.streambid.offer.OfferMode.FLEXIBLE, null, "gaming", new com.streambid.offer.OfferRectangle(1000, 2000, 3000, 4000));
+        assertThat(offers.createDraft(UUID.randomUUID(), advertiser, placement, terms, now)).isEmpty();
+        users.addRole(streamer, UserRole.ADMIN);
+        creatives.review(creative.id(), streamer, com.streambid.creative.CreativeStatus.APPROVED, null, 0, now);
+        UUID id = UUID.randomUUID();
+        assertThat(offers.createDraft(id, advertiser, placement, terms, now)).contains(id);
+        assertThat(offers.existsForParty(id, advertiser)).isTrue();
+        assertThat(offers.existsForParty(id, streamer)).isTrue();
+        assertThat(offers.existsForParty(id, UUID.randomUUID())).isFalse();
+        var revision = creativeDatabase.fetchSingle("SELECT * FROM ad_offer_revisions WHERE offer_id = ?", id);
+        assertThat(revision.get("rectangle_x", Integer.class)).isEqualTo(1000);
+        assertThat(revision.get("rectangle_width", Integer.class)).isEqualTo(3000);
+        assertThat(revision.get("price", java.math.BigDecimal.class)).isEqualByComparingTo("350.00");
+        assertThat(offers.createDraft(UUID.randomUUID(), streamer, placement, terms, now)).isEmpty();
+    }
+
     @Autowired org.springframework.transaction.PlatformTransactionManager creativeTransactions;
     @Test
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
