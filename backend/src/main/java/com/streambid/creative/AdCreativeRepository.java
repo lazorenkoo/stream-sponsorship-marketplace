@@ -19,6 +19,18 @@ public class AdCreativeRepository {
     }
 
     @Transactional
+    public AdCreative finishUpload(AdCreative creative) {
+        var intent = database.fetchOptional("""
+                SELECT attempts FROM creative_upload_intents
+                WHERE creative_id = ? AND format = ? FOR UPDATE
+                """, creative.id(), creative.format().name());
+        if (intent.isEmpty() || intent.get().get("attempts", Integer.class) != 0) {
+            throw new IllegalStateException("Upload expired or cleanup has started");
+        }
+        return insertPending(creative);
+    }
+
+    @Transactional
     public AdCreative insertPending(AdCreative creative) {
         var saved = database.fetchSingle("""
                 INSERT INTO ad_creatives(id, advertiser_id, title, object_key, format, width_px, height_px,

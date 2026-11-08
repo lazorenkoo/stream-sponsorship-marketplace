@@ -32,7 +32,7 @@ class CreativeUploadServiceTest {
 
     @Test
     void metadataComesFromValidatedImageAndStartsPending() {
-        when(creatives.insertPending(any())).thenAnswer(call -> call.getArgument(0));
+        when(creatives.finishUpload(any())).thenAnswer(call -> call.getArgument(0));
         var saved = service.upload("owner@example.com", "Banner", image);
         assertThat(saved.advertiserId()).isEqualTo(owner);
         assertThat(saved.status()).isEqualTo(CreativeStatus.PENDING);
@@ -40,18 +40,19 @@ class CreativeUploadServiceTest {
         var order = inOrder(intents, objects, creatives);
         order.verify(intents).create(saved.id(), CreativeFormat.WEBP, saved.createdAt());
         order.verify(objects).put(saved.id(), CreativeFormat.WEBP, image);
-        order.verify(creatives).insertPending(any());
+        order.verify(creatives).finishUpload(any());
         verify(objects, never()).delete(any(), any());
     }
 
     @Test
-    void failedMetadataPersistenceRemovesUploadedObject() {
+    void uncertainMetadataCommitNeverDeletesUploadedObject() {
         var failure = new IllegalStateException("Persistence failed");
-        when(creatives.insertPending(any())).thenThrow(failure);
+        when(creatives.finishUpload(any())).thenThrow(failure);
         assertThatThrownBy(() -> service.upload("owner@example.com", "Banner", image)).isSameAs(failure);
         var saved = org.mockito.ArgumentCaptor.forClass(AdCreative.class);
-        verify(creatives).insertPending(saved.capture());
-        verify(objects).delete(saved.getValue().id(), CreativeFormat.WEBP);
+        verify(creatives).finishUpload(saved.capture());
+        verify(objects, never()).delete(any(), any());
+        verify(intents, never()).complete(any());
     }
 
     @Test

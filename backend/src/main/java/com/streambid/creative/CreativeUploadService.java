@@ -51,12 +51,9 @@ public class CreativeUploadService {
             cleanup(objects, creative, exception);
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Creative storage is unavailable");
         }
-        try {
-            return creatives.insertPending(creative);
-        } catch (RuntimeException exception) {
-            cleanup(objects, creative, exception);
-            throw exception;
-        }
+        // A lost commit acknowledgement may still mean the metadata was saved.
+        // Leave uncertain outcomes to durable cleanup instead of deleting a valid file.
+        return creatives.finishUpload(creative);
     }
 
     private void cleanup(S3CreativeStorage objects, AdCreative creative, RuntimeException failure) {

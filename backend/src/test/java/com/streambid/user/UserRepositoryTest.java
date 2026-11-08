@@ -90,6 +90,22 @@ class UserRepositoryTest {
     @Autowired com.streambid.creative.AdCreativeRepository creatives;
     @Autowired com.streambid.creative.CreativeUploadIntentRepository uploadIntents;
     @Test
+    void cleanupClaimPreventsLateUploadMetadataCommit() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "upload-fence@example.com", "hash", "Advertiser"));
+        var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
+        var creative = new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, now);
+        uploadIntents.create(creative.id(), creative.format(), now);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3600), 10)).hasSize(1);
+        assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
+        assertThat(creatives.find(creative.id())).isEmpty();
+        uploadIntents.complete(creative.id());
+        assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void unfinishedUploadCleanupClaimsAreBoundedAndLeased() {
         var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
         UUID id = UUID.randomUUID();
