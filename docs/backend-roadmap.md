@@ -42,5 +42,10 @@ Automated delivery scheduling and OBS integration are deferred by the user.
 The advertiser draws a rectangle on the stream preview; the streamer approves it with the commercial terms.
 Each offer revision stores its own normalized rectangle. Booked areas and reservation time ranges must be visible without exposing private negotiations.
 Coordinates use a 10000-unit canvas so previews can scale without changing the agreed area.
-Reservation acceptance must eventually check both time and geometric conflicts transactionally.
+Reservation acceptance checks time, channel-wide geometric conflicts and placement capacity transactionally.
+Implemented: versioned offers and counteroffers, recipient acceptance, immutable agreement snapshots, private histories and booking inboxes.
+The channel reservation calendar exposes occupied rectangles and time ranges with consent and authorization checks.
+Either party may cancel before the placement starts, with a mandatory reason. Cancellation frees the reservation and preserves its agreement and audit history.
+Concurrent acceptance and cancellation, rollback on audit failure, private access and local S3-compatible uploads have integration coverage.
+Real Twitch/OBS end-to-end verification and production infrastructure are not claimed by these tests.
 A reservation is not proof that advertising was displayed.

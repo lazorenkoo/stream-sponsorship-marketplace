@@ -56,7 +56,7 @@ public class AdBookingRepository {
                   AND (p.negotiable OR (p.minimum_price = r.price AND p.duration_seconds = r.duration_seconds))
                   AND (p.unrestricted_categories OR EXISTS (SELECT 1 FROM placement_advertising_categories
                       WHERE placement_id = p.id AND category = r.advertising_category))
-                  AND r.mode = 'SCHEDULED' AND r.starts_at >= CAST(? AS timestamptz)
+                  AND r.mode = 'SCHEDULED' AND r.starts_at >= GREATEST(CAST(? AS timestamptz), clock_timestamp())
                   AND EXISTS (SELECT 1 FROM placement_availability w WHERE w.placement_id = p.id
                       AND w.starts_at <= r.starts_at AND w.ends_at >= r.starts_at + r.duration_seconds * INTERVAL '1 second')
                   AND NOT EXISTS (

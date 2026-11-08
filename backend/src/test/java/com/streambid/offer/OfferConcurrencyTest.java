@@ -271,6 +271,29 @@ class OfferConcurrencyTest {
         assertThat(database.fetchSingle("SELECT count(*) AS total FROM ad_booking_cancellations WHERE booking_id = ?", replacement)
                 .get("total", Long.class)).isEqualTo(1);
 
+        mvc.perform(get(calendar).param("from", from).param("to", to)).andExpect(status().isUnauthorized());
+        for (String invalidCursor : new String[] {"not-a-cursor", "a".repeat(65)}) {
+            mvc.perform(get(calendar).with(user("booking-outsider@example.com"))
+                    .param("from", from).param("to", to).param("cursor", invalidCursor)).andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", to).param("to", from))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from)
+                .param("to", scheduled.startsAt().plusSeconds(32 * 86400).toString())).andExpect(status().isBadRequest());
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to).param("limit", "101"))
+                .andExpect(status().isBadRequest());
+        database.execute("UPDATE placement_availability SET starts_at = starts_at - INTERVAL '1 hour' WHERE placement_id = ?", placement);
+        var pastTerms = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 30, OfferMode.SCHEDULED,
+                Instant.now().minusSeconds(60), "gaming", terms.rectangle());
+        UUID past = offers.createDraft(UUID.randomUUID(), advertiser, placement, pastTerms, Instant.now().minusSeconds(120)).orElseThrow();
+        assertThat(offers.sendDraft(past, advertiser, 0, Instant.now().minusSeconds(120))).isTrue();
+        assertThat(bookings.accept(past, streamer, 1, Instant.now().minusSeconds(120))).isEmpty();
+        assertThat(service.find("race-advertiser@example.com", past).status()).isEqualTo(OfferStatus.PENDING);
+        database.execute("DELETE FROM channel_credentials WHERE channel_id = ?", channel);
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(calendar).with(user("race-streamer@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isOk());
         database.execute("UPDATE channel_listings SET listed = FALSE WHERE channel_id = ?", channel);
         mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
                 .andExpect(status().isNotFound());
