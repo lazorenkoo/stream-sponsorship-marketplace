@@ -8,10 +8,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record OfferTerms(UUID creativeId, BigDecimal price, String currency, int durationSeconds,
-        OfferMode mode, Instant startsAt, String advertisingCategory) {
+        OfferMode mode, Instant startsAt, String advertisingCategory, OfferRectangle rectangle) {
     public OfferTerms {
         Objects.requireNonNull(creativeId, "Creative is required");
         Objects.requireNonNull(mode, "Offer mode is required");
+        Objects.requireNonNull(rectangle, "Advertising rectangle is required");
         if (price == null || price.signum() < 0) throw new IllegalArgumentException("Invalid offer price");
         try {
             price = price.setScale(2, RoundingMode.UNNECESSARY);
