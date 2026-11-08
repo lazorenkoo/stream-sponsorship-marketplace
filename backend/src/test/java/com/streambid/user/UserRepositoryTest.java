@@ -187,7 +187,9 @@ class UserRepositoryTest {
         var input = new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
                 com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
                 com.streambid.creative.CreativeStatus.APPROVED, 99, java.time.Instant.now());
+        uploadIntents.create(input.id(), input.format(), input.createdAt());
         var saved = creatives.insertPending(input);
+        assertThat(creativeDatabase.fetchCount(org.jooq.impl.DSL.table("creative_upload_intents"))).isZero();
         assertThat(saved.status()).isEqualTo(com.streambid.creative.CreativeStatus.PENDING);
         assertThat(saved.version()).isZero();
         assertThat(saved.storageKey()).isEqualTo(input.storageKey());

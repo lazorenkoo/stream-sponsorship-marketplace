@@ -20,13 +20,15 @@ public class AdCreativeRepository {
 
     @Transactional
     public AdCreative insertPending(AdCreative creative) {
-        return database.fetchSingle("""
+        var saved = database.fetchSingle("""
                 INSERT INTO ad_creatives(id, advertiser_id, title, object_key, format, width_px, height_px,
                     byte_size, sha256, status, version, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, CAST(? AS timestamptz)) RETURNING *
                 """, creative.id(), creative.advertiserId(), creative.title(), creative.storageKey(), creative.format().name(),
                 creative.widthPx(), creative.heightPx(), creative.byteSize(), creative.sha256(),
                 OffsetDateTime.ofInstant(creative.createdAt(), ZoneOffset.UTC)).map(this::map);
+        database.execute("DELETE FROM creative_upload_intents WHERE creative_id = ?", creative.id());
+        return saved;
     }
 
     public Optional<AdCreative> findOwned(UUID id, UUID advertiser) {

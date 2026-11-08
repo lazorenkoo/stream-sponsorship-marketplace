@@ -15,15 +15,17 @@ public class CreativeUploadService {
     private final UserRepository users;
     private final AdCreativeRepository creatives;
     private final CreativeImageValidator images;
+    private final CreativeUploadIntentRepository intents;
     private final ObjectProvider<S3CreativeStorage> storage;
     private final Clock clock = Clock.systemUTC();
 
     public CreativeUploadService(UserRepository users, AdCreativeRepository creatives, CreativeImageValidator images,
-            ObjectProvider<S3CreativeStorage> storage) {
+            ObjectProvider<S3CreativeStorage> storage, CreativeUploadIntentRepository intents) {
         this.users = users;
         this.creatives = creatives;
         this.images = images;
         this.storage = storage;
+        this.intents = intents;
     }
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -42,6 +44,7 @@ public class CreativeUploadService {
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid creative title or image");
         }
+        intents.create(creative.id(), creative.format(), creative.createdAt());
         try {
             objects.put(creative.id(), creative.format(), bytes);
         } catch (RuntimeException exception) {
