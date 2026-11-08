@@ -193,6 +193,19 @@ class OfferConcurrencyTest {
                     .containsExactlyInAnyOrder(200, 409);
         }
         assertThat(database.fetchCount(org.jooq.impl.DSL.table("ad_bookings"))).isEqualTo(4);
+        var inbox = mvc.perform(get("/api/bookings").with(user("race-advertiser@example.com")).param("limit", "1").param("status", "BOOKED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasMore").value(true))
+                .andExpect(jsonPath("$.bookings.length()").value(1)).andReturn();
+        String after = new com.fasterxml.jackson.databind.ObjectMapper().readTree(inbox.getResponse().getContentAsString()).get("nextCursor").asText();
+        mvc.perform(get("/api/bookings").with(user("race-streamer@example.com")).param("after", after))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.bookings.length()").value(3))
+                .andExpect(jsonPath("$.hasMore").value(false));
+        mvc.perform(get("/api/bookings").with(user("booking-outsider@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.bookings.length()").value(0));
+        mvc.perform(get("/api/bookings").with(user("race-advertiser@example.com")).param("status", "CANCELLED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.bookings.length()").value(0));
+        mvc.perform(get("/api/bookings").with(user("race-advertiser@example.com")).param("limit", "101"))
+                .andExpect(status().isBadRequest());
         String calendar = "/api/catalog/channels/" + channel + "/reservations";
         String from = scheduled.startsAt().toString(), to = scheduled.startsAt().plusSeconds(120).toString();
         var calendarResult = mvc.perform(get(calendar).with(user("booking-outsider@example.com"))

@@ -36,6 +36,15 @@ public class AdBookingService {
         return bookings.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
+    public BookingPage list(String email, UUID after, BookingStatus status, int limit) {
+        UUID actor = actor(email);
+        if (limit < 1 || limit > 100) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid booking limit");
+        var entries = bookings.listForParty(actor, after, status, limit + 1);
+        boolean more = entries.size() > limit;
+        var page = entries.subList(0, Math.min(limit, entries.size()));
+        return new BookingPage(page, more, more ? page.getLast().id() : null);
+    }
+
     private UUID actor(String email) {
         return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
     }
