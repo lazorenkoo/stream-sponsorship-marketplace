@@ -88,6 +88,36 @@ class UserRepositoryTest {
     }
     @Autowired org.jooq.DSLContext creativeDatabase;
     @Autowired com.streambid.creative.AdCreativeRepository creatives;
+    @Autowired com.streambid.creative.CreativeModerationService moderation;
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void reviewEventFailureRollsBackModerationDecision() {
+        UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
+        users.save(new UserAccount(owner, "review-rollback-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(admin, "review-rollback-admin@example.com", "hash", "Admin"));
+        users.addRole(admin, UserRole.ADMIN);
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, java.time.Instant.now()));
+        try {
+            creativeDatabase.execute("""
+                    INSERT INTO creative_review_events(creative_id, version, reviewer_id, status, occurred_at)
+                    VALUES (?, 1, ?, 'APPROVED', CURRENT_TIMESTAMP)
+                    """, creative.id(), admin);
+            var request = new com.streambid.creative.CreativeReviewRequest(com.streambid.creative.CreativeStatus.APPROVED, null, 0L);
+            assertThatThrownBy(() -> moderation.review("review-rollback-admin@example.com", creative.id(), request))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(creatives.findOwned(creative.id(), owner)).contains(creative);
+            assertThat(creatives.reviewsOwned(creative.id(), owner, null, 20)).hasSize(1);
+            creativeDatabase.execute("DELETE FROM creative_review_events WHERE creative_id = ?", creative.id());
+            assertThat(moderation.review("review-rollback-admin@example.com", creative.id(), request).version()).isEqualTo(1);
+            assertThat(creatives.reviewsOwned(creative.id(), owner, null, 20)).hasSize(1);
+        } finally {
+            creativeDatabase.execute("DELETE FROM creative_review_events WHERE creative_id = ?", creative.id());
+            creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", creative.id());
+            creativeDatabase.execute("DELETE FROM users WHERE id IN (?, ?)", owner, admin);
+        }
+    }
     @Test
     void moderationHttpRequiresDatabaseAdminAndValidReason() throws Exception {
         UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
