@@ -36,6 +36,16 @@ public class AdCreativeRepository {
     public Optional<AdCreative> find(UUID id) {
         return database.fetchOptional("SELECT * FROM ad_creatives WHERE id = ?", id).map(this::map);
     }
+    public List<CreativeReviewEvent> reviewsOwned(UUID id, UUID owner, Long beforeVersion, int limit) {
+        return database.fetch("""
+                SELECT e.* FROM creative_review_events e JOIN ad_creatives c ON c.id = e.creative_id
+                WHERE c.id = ? AND c.advertiser_id = ? AND (CAST(? AS bigint) IS NULL OR e.version < ?)
+                ORDER BY e.version DESC LIMIT ?
+                """, id, owner, beforeVersion, beforeVersion, limit)
+                .map(row -> new CreativeReviewEvent(row.get("version", Long.class),
+                        CreativeStatus.valueOf(row.get("status", String.class)), row.get("reason", String.class),
+                        row.get("occurred_at", OffsetDateTime.class).toInstant()));
+    }
 
     public List<AdCreative> pending(UUID after, int limit) {
         if (limit < 1 || limit > 100) throw new IllegalArgumentException("Invalid moderation queue limit");

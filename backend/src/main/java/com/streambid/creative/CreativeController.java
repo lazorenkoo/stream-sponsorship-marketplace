@@ -45,6 +45,11 @@ public class CreativeController {
                 .header("Content-Disposition", "inline; filename=\"" + id + "." + content.format().extension() + "\"")
                 .body(content.bytes());
     }
+    @GetMapping("/api/creatives/{id}/reviews")
+    public ResponseEntity<List<CreativeReviewEvent>> reviews(@PathVariable UUID id, Principal principal,
+            @RequestParam(required = false) Long beforeVersion, @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(reads.reviews(principal.getName(), id, beforeVersion, limit));
+    }
 
     @PostMapping(value = "/api/creatives", consumes = "multipart/form-data")
     public ResponseEntity<CreativeView> upload(Principal principal, @RequestParam String title, @RequestParam MultipartFile file) {

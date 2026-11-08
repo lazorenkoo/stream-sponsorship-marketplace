@@ -75,10 +75,12 @@ class CreativeUploadIntegrationTest {
 
     @Test
     void multipartUploadPersistsRealObjectAndPrivateMetadata() throws Exception {
-        UUID owner = UUID.randomUUID(), other = UUID.randomUUID();
+        UUID owner = UUID.randomUUID(), other = UUID.randomUUID(), admin = UUID.randomUUID();
         users.save(new UserAccount(owner, "real-upload@example.com", "hash", "Advertiser"));
         users.addRole(owner, UserRole.ADVERTISER);
         users.save(new UserAccount(other, "other-upload@example.com", "hash", "Other"));
+        users.save(new UserAccount(admin, "upload-admin@example.com", "hash", "Moderator"));
+        users.addRole(admin, UserRole.ADMIN);
         byte[] bytes = java.util.Base64.getDecoder().decode("UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=");
         try {
             var result = mvc.perform(multipart("/api/creatives").file(new MockMultipartFile("file", "banner.jpg", "image/jpeg", bytes))
@@ -91,12 +93,28 @@ class CreativeUploadIntegrationTest {
                     .andExpect(status().isOk()).andExpect(content().bytes(bytes)).andExpect(header().string("Cache-Control", "no-store"));
             mvc.perform(get("/api/creatives/" + id + "/content").with(user("other-upload@example.com")))
                     .andExpect(status().isNotFound());
+            String preview = "/api/admin/creatives/" + id + "/content";
+            mvc.perform(get(preview).with(user("real-upload@example.com").roles("ADMIN"))).andExpect(status().isForbidden());
+            mvc.perform(get(preview).with(user("upload-admin@example.com")))
+                    .andExpect(status().isOk()).andExpect(content().bytes(bytes));
+            mvc.perform(get("/api/creatives/" + id).with(user("upload-admin@example.com"))).andExpect(status().isNotFound());
+            mvc.perform(post("/api/admin/creatives/" + id + "/review").with(user("upload-admin@example.com")).with(csrf())
+                    .contentType("application/json").content("{\"status\":\"REJECTED\",\"reason\":\"Banner needs revision\",\"expectedVersion\":0}"))
+                    .andExpect(status().isOk());
+            String history = "/api/creatives/" + id + "/reviews";
+            mvc.perform(get(history).with(user("real-upload@example.com"))).andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].reason").value("Banner needs revision"))
+                    .andExpect(jsonPath("$[0].status").value("REJECTED"));
+            mvc.perform(get(history).with(user("other-upload@example.com"))).andExpect(status().isNotFound());
+            mvc.perform(get(history).with(user("real-upload@example.com")).param("beforeVersion", "1"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
         } finally {
             for (var creative : creatives.listOwned(owner, null, 100)) {
                 storage.delete(creative.id(), creative.format());
+                database.execute("DELETE FROM creative_review_events WHERE creative_id = ?", creative.id());
                 database.execute("DELETE FROM ad_creatives WHERE id = ?", creative.id());
             }
-            database.execute("DELETE FROM users WHERE id IN (?, ?)", owner, other);
+            database.execute("DELETE FROM users WHERE id IN (?, ?, ?)", owner, other, admin);
         }
     }
 }

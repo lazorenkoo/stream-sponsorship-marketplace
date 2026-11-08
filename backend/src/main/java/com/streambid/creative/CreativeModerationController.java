@@ -27,4 +27,13 @@ public class CreativeModerationController {
             @Valid @RequestBody CreativeReviewRequest request) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(moderation.review(principal.getName(), id, request));
     }
+    @GetMapping("/api/admin/creatives/{id}/content")
+    public ResponseEntity<byte[]> content(@PathVariable UUID id, Principal principal) {
+        var content = moderation.content(principal.getName(), id);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentLength(content.bytes().length)
+                .contentType(org.springframework.http.MediaType.parseMediaType(content.format().contentType()))
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Disposition", "inline; filename=\"" + id + "." + content.format().extension() + "\"")
+                .body(content.bytes());
+    }
 }

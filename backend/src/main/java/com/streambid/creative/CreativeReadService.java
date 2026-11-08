@@ -34,11 +34,14 @@ public class CreativeReadService {
     }
 
     public Content content(String email, UUID id) {
-        var creative = find(email, id);
+        return content(find(email, id));
+    }
+
+    Content content(AdCreative creative) {
         var objects = storage.getIfAvailable();
         if (objects == null) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Creative storage is unavailable");
         try {
-            byte[] bytes = objects.read(id, creative.format());
+            byte[] bytes = objects.read(creative.id(), creative.format());
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
             if (bytes.length != creative.byteSize()
                     || !MessageDigest.isEqual(digest, java.util.HexFormat.of().parseHex(creative.sha256()))) {
@@ -54,6 +57,14 @@ public class CreativeReadService {
 
     private UUID owner(String email) {
         return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
+    }
+    public List<CreativeReviewEvent> reviews(String email, UUID id, Long beforeVersion, int limit) {
+        UUID owner = owner(email);
+        creatives.findOwned(id, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100 || (beforeVersion != null && beforeVersion < 0)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid review history limit or cursor");
+        }
+        return creatives.reviewsOwned(id, owner, beforeVersion, limit);
     }
 
     public record Content(CreativeFormat format, byte[] bytes) { }

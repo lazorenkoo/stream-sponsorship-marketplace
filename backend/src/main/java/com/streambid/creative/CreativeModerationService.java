@@ -13,10 +13,17 @@ import org.springframework.web.server.ResponseStatusException;
 public class CreativeModerationService {
     private final UserRepository users;
     private final AdCreativeRepository creatives;
+    private final CreativeReadService reads;
 
-    public CreativeModerationService(UserRepository users, AdCreativeRepository creatives) {
+    public CreativeModerationService(UserRepository users, AdCreativeRepository creatives, CreativeReadService reads) {
         this.users = users;
         this.creatives = creatives;
+        this.reads = reads;
+    }
+    public CreativeReadService.Content content(String email, UUID id) {
+        admin(email);
+        var creative = creatives.find(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return reads.content(creative);
     }
 
     public List<CreativeView> pending(String email, UUID after, int limit) {
