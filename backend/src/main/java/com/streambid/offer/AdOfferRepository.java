@@ -47,8 +47,39 @@ public class AdOfferRepository {
     }
 
     public boolean existsForParty(UUID id, UUID actor) {
-        return database.fetchExists(database.selectOne().from("ad_offers")
-                .where("id = ? AND (advertiser_id = ? OR streamer_id = ?)", id, actor, actor));
+        return findForParty(id, actor).isPresent();
+    }
+
+    public Optional<OfferView> findForParty(UUID id, UUID actor) {
+        return queryForParty(id, actor, null, 1).stream().findFirst();
+    }
+
+    public java.util.List<OfferView> listForParty(UUID actor, UUID after, int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Offer limit must be between 1 and 100");
+        return queryForParty(null, actor, after, limit);
+    }
+
+    private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit) {
+        return database.fetch("""
+                SELECT o.id, o.placement_id, o.status, o.version, o.current_revision,
+                    o.created_at AS offer_created_at, o.updated_at, r.*
+                FROM ad_offers o JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
+                WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.status <> 'DRAFT'))
+                  AND (CAST(? AS uuid) IS NULL OR o.id = ?)
+                  AND (CAST(? AS uuid) IS NULL OR o.id > ?)
+                ORDER BY o.id LIMIT ?
+                """, actor, actor, id, id, after, after, limit).map(row -> {
+            var start = row.get("starts_at", OffsetDateTime.class);
+            var terms = new OfferTerms(row.get("creative_id", UUID.class), row.get("price", java.math.BigDecimal.class),
+                    row.get("currency", String.class), row.get("duration_seconds", Integer.class),
+                    OfferMode.valueOf(row.get("mode", String.class)), start == null ? null : start.toInstant(),
+                    row.get("advertising_category", String.class), new OfferRectangle(row.get("rectangle_x", Integer.class),
+                    row.get("rectangle_y", Integer.class), row.get("rectangle_width", Integer.class), row.get("rectangle_height", Integer.class)));
+            return new OfferView(row.get("id", UUID.class), row.get("placement_id", UUID.class),
+                    OfferStatus.valueOf(row.get("status", String.class)), row.get("version", Long.class),
+                    row.get("current_revision", Long.class), terms, row.get("offer_created_at", OffsetDateTime.class).toInstant(),
+                    row.get("updated_at", OffsetDateTime.class).toInstant());
+        });
     }
 
     private OffsetDateTime time(Instant value) {

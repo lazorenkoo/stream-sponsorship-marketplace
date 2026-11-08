@@ -137,7 +137,17 @@ class UserRepositoryTest {
         UUID id = UUID.randomUUID();
         assertThat(offers.createDraft(id, advertiser, placement, terms, now)).contains(id);
         assertThat(offers.existsForParty(id, advertiser)).isTrue();
-        assertThat(offers.existsForParty(id, streamer)).isTrue();
+        assertThat(offers.existsForParty(id, streamer)).isFalse();
+        var view = offers.findForParty(id, advertiser).orElseThrow();
+        assertThat(view.status()).isEqualTo(com.streambid.offer.OfferStatus.DRAFT);
+        assertThat(view.terms()).isEqualTo(terms);
+        assertThat(offers.listForParty(advertiser, null, 20)).containsExactly(view);
+        assertThat(offers.listForParty(advertiser, id, 20)).isEmpty();
+        assertThat(offers.listForParty(streamer, null, 20)).isEmpty();
+        assertThatThrownBy(() -> offers.listForParty(advertiser, null, 101)).isInstanceOf(IllegalArgumentException.class);
+        creativeDatabase.execute("UPDATE ad_offers SET status = 'PENDING' WHERE id = ?", id);
+        assertThat(offers.findForParty(id, streamer)).isPresent();
+        assertThat(offers.listForParty(streamer, null, 20)).hasSize(1);
         assertThat(offers.existsForParty(id, UUID.randomUUID())).isFalse();
         var revision = creativeDatabase.fetchSingle("SELECT * FROM ad_offer_revisions WHERE offer_id = ?", id);
         assertThat(revision.get("rectangle_x", Integer.class)).isEqualTo(1000);
