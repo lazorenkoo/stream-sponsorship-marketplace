@@ -88,6 +88,23 @@ class UserRepositoryTest {
     }
     @Autowired org.jooq.DSLContext creativeDatabase;
     @Autowired com.streambid.creative.AdCreativeRepository creatives;
+    @Autowired com.streambid.creative.CreativeUploadIntentRepository uploadIntents;
+    @Test
+    void unfinishedUploadCleanupClaimsAreBoundedAndLeased() {
+        var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
+        UUID id = UUID.randomUUID();
+        uploadIntents.create(id, com.streambid.creative.CreativeFormat.WEBP, now);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3599), 10)).isEmpty();
+        var claimed = uploadIntents.claimExpired(now.plusSeconds(3600), 10);
+        assertThat(claimed).hasSize(1);
+        assertThat(claimed.getFirst().creativeId()).isEqualTo(id);
+        assertThat(claimed.getFirst().attempts()).isEqualTo(1);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3601), 10)).isEmpty();
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3900), 10).getFirst().attempts()).isEqualTo(2);
+        uploadIntents.complete(id);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(7200), 10)).isEmpty();
+        assertThatThrownBy(() -> uploadIntents.claimExpired(now, 101)).isInstanceOf(IllegalArgumentException.class);
+    }
     @Autowired com.streambid.creative.CreativeModerationService moderation;
     @Test
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
