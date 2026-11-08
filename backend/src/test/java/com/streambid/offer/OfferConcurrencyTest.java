@@ -193,6 +193,23 @@ class OfferConcurrencyTest {
                     .containsExactlyInAnyOrder(200, 409);
         }
         assertThat(database.fetchCount(org.jooq.impl.DSL.table("ad_bookings"))).isEqualTo(4);
+        String calendar = "/api/catalog/channels/" + channel + "/reservations";
+        String from = scheduled.startsAt().toString(), to = scheduled.startsAt().plusSeconds(120).toString();
+        var calendarResult = mvc.perform(get(calendar).with(user("booking-outsider@example.com"))
+                .param("from", from).param("to", to).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasMore").value(true))
+                .andExpect(jsonPath("$.reservations[0].rectangle").exists())
+                .andExpect(jsonPath("$.reservations[0].offerId").doesNotExist()).andReturn();
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        String next = mapper.readTree(calendarResult.getResponse().getContentAsString()).get("nextCursor").asText();
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to).param("cursor", next))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.reservations.length()").value(3));
+        database.execute("UPDATE channel_listings SET listed = FALSE WHERE channel_id = ?", channel);
+        mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(calendar).with(user("race-streamer@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isOk());
+
 
 
     }
