@@ -105,6 +105,68 @@ class OfferConcurrencyTest {
         assertThat(database.fetchSingle("SELECT rectangle_width FROM ad_bookings WHERE id = ?", booking)
                 .get("rectangle_width", Integer.class)).isEqualTo(2000);
         assertThat(bookings.accept(bookable.id(), streamer, 1, Instant.now())).isEmpty();
+        var disjoint = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60, OfferMode.SCHEDULED,
+                scheduled.startsAt(), "gaming", new OfferRectangle(5000, 5000, 1000, 1000));
+        UUID capacityBlocked = sentOffer(placement, disjoint);
+        assertThat(bookings.accept(capacityBlocked, streamer, 1, Instant.now())).isEmpty();
+        assertThat(service.find("race-advertiser@example.com", capacityBlocked).status()).isEqualTo(OfferStatus.PENDING);
+        UUID otherPlacement = UUID.randomUUID();
+        database.execute("""
+                INSERT INTO ad_placements(id,channel_id,title,position,width_px,height_px,duration_seconds,
+                    minimum_price,currency,negotiable,capacity,active,created_at,updated_at)
+                SELECT ?,channel_id,title,position,width_px,height_px,duration_seconds,
+                    minimum_price,currency,negotiable,10,active,created_at,updated_at FROM ad_placements WHERE id = ?
+                """, otherPlacement, placement);
+        database.execute("INSERT INTO placement_availability VALUES (?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP + INTERVAL '2 hours')",
+                UUID.randomUUID(), otherPlacement);
+        UUID geometryBlocked = sentOffer(otherPlacement, scheduled);
+        assertThatThrownBy(() -> bookings.accept(geometryBlocked, streamer, 1, Instant.now()))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
+                .satisfies(failure -> {
+                    Throwable cause = failure;
+                    while (cause.getCause() != null) cause = cause.getCause();
+                    assertThat(((java.sql.SQLException) cause).getSQLState()).isEqualTo("23P01");
+                });
+        var rolledBack = service.find("race-advertiser@example.com", geometryBlocked);
+        assertThat(rolledBack.status()).isEqualTo(OfferStatus.PENDING);
+        assertThat(rolledBack.version()).isEqualTo(1);
+        assertThat(offers.eventsForParty(geometryBlocked, advertiser, null, 20)).hasSize(2);
+        assertThat(database.fetchSingle("SELECT count(*) AS total FROM ad_bookings WHERE offer_id = ?", geometryBlocked)
+                .get("total", Long.class)).isZero();
+        var adjacentArea = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60, OfferMode.SCHEDULED,
+                scheduled.startsAt(), "gaming", new OfferRectangle(2000, 0, 2000, 1000));
+        assertThat(bookings.accept(sentOffer(otherPlacement, adjacentArea), streamer, 1, Instant.now())).isPresent();
+        var adjacentTime = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60, OfferMode.SCHEDULED,
+                scheduled.startsAt().plusSeconds(60), "gaming", scheduled.rectangle());
+        assertThat(bookings.accept(sentOffer(placement, adjacentTime), streamer, 1, Instant.now())).isPresent();
+        UUID firstOffer = sentOffer(otherPlacement, disjoint), secondOffer = sentOffer(otherPlacement, disjoint);
+        var acceptBarrier = new CyclicBarrier(2);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var firstAccept = executor.submit(() -> acceptAfterBarrier(firstOffer, streamer, acceptBarrier));
+            var secondAccept = executor.submit(() -> acceptAfterBarrier(secondOffer, streamer, acceptBarrier));
+            assertThat(java.util.List.of(firstAccept.get(10, TimeUnit.SECONDS), secondAccept.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+        }
+        assertThat(database.fetchCount(org.jooq.impl.DSL.table("ad_bookings"))).isEqualTo(4);
 
+
+    }
+
+    private UUID sentOffer(UUID placement, OfferTerms terms) {
+        var created = service.create("race-advertiser@example.com", new CreateOfferRequest(placement, terms));
+        service.send("race-advertiser@example.com", created.id(), new OfferVersionRequest(0L));
+        return created.id();
+    }
+
+    private int acceptAfterBarrier(UUID offer, UUID recipient, CyclicBarrier barrier) throws Exception {
+        barrier.await(5, TimeUnit.SECONDS);
+        try {
+            return bookings.accept(offer, recipient, 1, Instant.now()).isPresent() ? 200 : 409;
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            Throwable cause = conflict;
+            while (cause.getCause() != null) cause = cause.getCause();
+            if (cause instanceof java.sql.SQLException sql && "23P01".equals(sql.getSQLState())) return 409;
+            throw conflict;
+        }
     }
 }
