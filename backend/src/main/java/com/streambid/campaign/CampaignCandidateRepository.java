@@ -17,11 +17,13 @@ public class CampaignCandidateRepository {
     }
     public java.util.Optional<CampaignCandidate> findListed(UUID channelId) {
         return database.fetchOptional("""
-                SELECT c.id, c.platform, c.display_name FROM connected_channels c
+                SELECT c.id, c.platform, c.display_name, u.channel_description FROM connected_channels c
+                JOIN users u ON u.id = c.user_id
                 JOIN channel_listings l ON l.channel_id = c.id AND l.listed
                 JOIN channel_credentials t ON t.channel_id = c.id WHERE c.id = ?
                 """, channelId).map(row -> new CampaignCandidate(row.get("id", UUID.class),
-                        StreamingPlatform.valueOf(row.get("platform", String.class)), row.get("display_name", String.class)));
+                        StreamingPlatform.valueOf(row.get("platform", String.class)), row.get("display_name", String.class),
+                        row.get("channel_description", String.class)));
     }
 
     public List<CampaignCandidate> find(Set<StreamingPlatform> selected, UUID after, int limit) {
@@ -35,7 +37,10 @@ public class CampaignCandidateRepository {
         var id = DSL.field(DSL.name("c", "id"), UUID.class);
         var platform = DSL.field(DSL.name("c", "platform"), String.class);
         var name = DSL.field(DSL.name("c", "display_name"), String.class);
-        return database.select(id, platform, name).from(DSL.table(DSL.name("connected_channels")).as("c"))
+        var description = DSL.field(DSL.name("u", "channel_description"), String.class);
+        return database.select(id, platform, name, description).from(DSL.table(DSL.name("connected_channels")).as("c"))
+                .join(DSL.table(DSL.name("users")).as("u"))
+                .on(DSL.field(DSL.name("u", "id"), UUID.class).eq(DSL.field(DSL.name("c", "user_id"), UUID.class)))
                 .join(DSL.table(DSL.name("channel_listings")).as("l"))
                 .on(id.eq(DSL.field(DSL.name("l", "channel_id"), UUID.class)))
                 .join(DSL.table(DSL.name("channel_credentials")).as("t"))
@@ -43,6 +48,6 @@ public class CampaignCandidateRepository {
                 .where(DSL.field(DSL.name("l", "listed"), Boolean.class).isTrue())
                 .and(platform.in(platforms.stream().map(Enum::name).toList()))
                 .and(after == null ? DSL.trueCondition() : id.gt(after)).orderBy(id).limit(limit)
-                .fetch(row -> new CampaignCandidate(row.get(id), StreamingPlatform.valueOf(row.get(platform)), row.get(name)));
+                .fetch(row -> new CampaignCandidate(row.get(id), StreamingPlatform.valueOf(row.get(platform)), row.get(name), row.get(description)));
     }
 }

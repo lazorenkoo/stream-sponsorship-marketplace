@@ -1,5 +1,6 @@
 package com.streambid.channel;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import com.streambid.platform.StreamingPlatform;
 import com.streambid.user.UserAccount;
@@ -815,15 +816,23 @@ class ChannelRepositoryTest {
     @Test
     void streamerCatalogRequiresConsentAndHidesDisconnectedChannels() throws Exception {
         var channel = channelForRefresh("catalog-streamer@example.com");
+        mvc.perform(put("/api/users/me/settings").with(user("catalog-streamer@example.com")).with(csrf())
+                        .contentType("application/json")
+                        .content("""
+                                {"displayName":"Catalog Streamer","channelDescription":"  Variety streams  "}
+                                """))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.channelDescription").value("Variety streams"));
         String path = "/api/catalog/streamers/" + channel.id();
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
         listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.channelId").value(channel.id().toString()))
+                .andExpect(jsonPath("$.channelDescription").value("Variety streams"))
                 .andExpect(jsonPath("$.userId").doesNotExist()).andExpect(jsonPath("$.externalChannelId").doesNotExist());
         mvc.perform(get("/api/catalog/streamers").with(user("catalog-viewer@example.com")).param("platform", "TWITCH"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(1))
+                .andExpect(jsonPath("$.streamers[0].channelDescription").value("Variety streams"))
                 .andExpect(jsonPath("$.hasMore").value(false));
         credentials.delete(channel.id());
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());

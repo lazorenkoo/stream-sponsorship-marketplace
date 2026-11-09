@@ -4,7 +4,11 @@ import com.streambid.platform.StreamingPlatform;
 import java.util.Objects;
 import java.util.UUID;
 
-public record CampaignCandidate(UUID channelId, StreamingPlatform platform, String displayName) {
+public record CampaignCandidate(UUID channelId, StreamingPlatform platform, String displayName, String channelDescription) {
+    public CampaignCandidate(UUID channelId, StreamingPlatform platform, String displayName) {
+        this(channelId, platform, displayName, null);
+    }
+
     public CampaignCandidate {
         Objects.requireNonNull(channelId, "Channel ID is required");
         Objects.requireNonNull(platform, "Platform is required");

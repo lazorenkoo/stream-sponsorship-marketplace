@@ -21,6 +21,7 @@ export function Header() {
         </nav>
 
         <div className="flex items-center gap-2 text-sm font-semibold">
+          <a href="/profile" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Profile</a>
           <a href="/login" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Log in</a>
           <a href="/register" className="rounded-lg bg-sky-700 px-3 py-2 text-white hover:bg-sky-800">Sign up</a>
         </div>
