@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button } from './components/ui/button'
 import { LoginForm } from './components/LoginForm'
+import { CatalogResults } from './components/CatalogResults'
 import { useSession } from './lib/use-session'
 import { MonitorPlay, Radio, Sparkles } from 'lucide-react'
 
@@ -18,7 +19,7 @@ export default function App() {
       <header className="border-b border-sky-100 bg-white/90">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 px-6 py-5">
           <a href="/" className="flex items-center gap-2 text-xl font-bold tracking-tight"><MonitorPlay className="text-sky-600" />StreamBid</a>
-          <nav aria-label="Каталоги" className="flex gap-2">
+          <nav aria-label="Каталоги" className="flex flex-wrap gap-2">
             {(Object.keys(catalogs) as Array<keyof typeof catalogs>).map(key => (
               <Button variant="ghost" key={key} type="button" aria-pressed={selected === key} onClick={() => setSelected(key)}
                 className={`rounded-full px-4 py-2 text-sm font-medium transition ${selected === key ? 'bg-sky-100 text-sky-800' : 'text-slate-600 hover:bg-slate-100'}`}>{catalogs[key].label}</Button>
@@ -42,7 +43,7 @@ export default function App() {
         {!auth.loading && !auth.error && !auth.session && <LoginForm onSuccess={auth.setSession} />}
         <section aria-label={catalog.label} className="mt-12 rounded-3xl border border-sky-100 bg-white p-8 shadow-sm md:p-12">
           <h2 className="flex items-center gap-3 text-xl font-semibold"><Radio className="text-sky-600" />{catalog.label}</h2>
-          <p className="mt-4 max-w-xl leading-relaxed text-slate-500">{auth.session ? 'Выберите канал или предложение бренда для следующего размещения.' : 'Войдите в аккаунт, чтобы просматривать каталог и согласовывать размещения.'}</p>
+          {auth.session ? <CatalogResults key={selected} kind={selected} /> : !auth.loading && <p className="mt-4 max-w-xl leading-relaxed text-slate-500">Войдите в аккаунт, чтобы просматривать каталог и согласовывать размещения.</p>}
         </section>
       </main>
     </div>

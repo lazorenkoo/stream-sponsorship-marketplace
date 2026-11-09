@@ -2,7 +2,7 @@
 
 @theme { --font-sans: "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
 :root { font-family: var(--font-sans); font-synthesis: none; text-rendering: optimizeLegibility; }
-body { margin: 0; min-width: 320px; }
+body { margin: 0; min-width: 280px; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 :focus-visible { outline: 3px solid #0284c7; outline-offset: 4px; }
