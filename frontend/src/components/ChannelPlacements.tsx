@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { api } from '../lib/api'
+import { ReservationCalendar } from './ReservationCalendar'
 import { Button } from './ui/button'
 
 export type Placement = {
@@ -48,6 +49,7 @@ export function ChannelPlacements({ channelId, title, onBack }: { channelId: str
     <section className="mt-5 space-y-4" aria-label="Рекламные места канала" aria-busy={loading}>
       <Button variant="ghost" onClick={onBack}><ArrowLeft />К списку стримеров</Button>
       <h3 className="break-words text-xl font-semibold">{title}</h3>
+      <ReservationCalendar channelId={channelId} />
       <div className="grid gap-4 md:grid-cols-2">
         {placements.map(place => (
           <article key={place.id} className="min-w-0 rounded-2xl border border-sky-100 bg-sky-50/60 p-5">
