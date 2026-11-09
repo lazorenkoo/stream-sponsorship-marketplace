@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ChannelPlacements } from './ChannelPlacements'
 import { Button } from './ui/button'
 import { api } from '../lib/api'
 
@@ -24,6 +25,7 @@ async function loadCatalog(kind: Kind, platform: string, cursor: string | null, 
 }
 
 export function CatalogResults({ kind }: { kind: Kind }) {
+  const [selected, setSelected] = useState<Card | null>(null)
   const [platform, setPlatform] = useState('')
   const [cursor, setCursor] = useState<string | null>(null)
   const [page, setPage] = useState<Page>({ cards: [], next: null })
@@ -40,6 +42,7 @@ export function CatalogResults({ kind }: { kind: Kind }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [kind, platform, cursor, attempt])
+  if (selected) return <ChannelPlacements key={selected.id} channelId={selected.id} title={selected.title} onBack={() => setSelected(null)} />
   return (
     <div className="mt-6 space-y-5" aria-busy={loading}>
       <label className="flex flex-wrap items-center gap-3 text-sm font-medium">Платформа
@@ -54,6 +57,7 @@ export function CatalogResults({ kind }: { kind: Kind }) {
           <h3 className="break-words text-lg font-semibold">{card.title}</h3>
           {card.description && <p className="mt-2 break-words text-sm text-slate-600">{card.description}</p>}
           <div className="mt-4 flex flex-wrap gap-2">{card.platforms.map(value => <span key={value} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-sky-700">{platformNames[value] ?? value}</span>)}</div>
+          {kind === 'streamers' && <Button className="mt-4" variant="outline" onClick={() => setSelected(card)}>Рекламные места</Button>}
         </article>)}
       </div>
       {loading && <p role="status" className="text-sm text-slate-500">Загружаем каталог…</p>}
