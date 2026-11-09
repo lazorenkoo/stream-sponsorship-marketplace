@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from './components/ui/button'
+import { RegisterForm } from './components/RegisterForm'
 import { LoginForm } from './components/LoginForm'
 import { CatalogResults } from './components/CatalogResults'
 import { useSession } from './lib/use-session'
@@ -14,6 +15,8 @@ export default function App() {
   const [selected, setSelected] = useState<keyof typeof catalogs>('streamers')
   const catalog = catalogs[selected]
   const auth = useSession()
+  const [registering, setRegistering] = useState(false)
+  const [accountCreated, setAccountCreated] = useState(false)
   return (
     <div className="min-h-screen bg-sky-50/60 text-slate-900">
       <header className="border-b border-sky-100 bg-white/90">
@@ -40,7 +43,13 @@ export default function App() {
           <p className="mt-5 max-w-xl text-lg leading-relaxed text-slate-600">{catalog.description}</p>
         </section>
         {auth.error && <div role="alert" className="mt-8 flex flex-wrap items-center gap-4 rounded-xl bg-red-50 p-4 text-sm text-red-800">{auth.error}<Button variant="outline" onClick={auth.retry}>Повторить</Button></div>}
-        {!auth.loading && !auth.error && !auth.session && <LoginForm onSuccess={auth.setSession} />}
+        {!auth.loading && !auth.error && !auth.session && (registering
+          ? <RegisterForm onBack={() => setRegistering(false)} onCreated={() => { setRegistering(false); setAccountCreated(true) }} />
+          : <>
+              {accountCreated && <p role="status" className="mt-6 text-sm text-sky-800">Аккаунт создан. Теперь можно войти.</p>}
+              <LoginForm onSuccess={session => { setAccountCreated(false); auth.setSession(session) }} />
+              <Button className="mt-3" variant="ghost" onClick={() => setRegistering(true)}>Создать аккаунт</Button>
+            </>)}
         <section aria-label={catalog.label} className="mt-12 rounded-3xl border border-sky-100 bg-white p-8 shadow-sm md:p-12">
           <h2 className="flex items-center gap-3 text-xl font-semibold"><Radio className="text-sky-600" />{catalog.label}</h2>
           {auth.session ? <CatalogResults key={selected} kind={selected} /> : !auth.loading && <p className="mt-4 max-w-xl leading-relaxed text-slate-500">Войдите в аккаунт, чтобы просматривать каталог и согласовывать размещения.</p>}
