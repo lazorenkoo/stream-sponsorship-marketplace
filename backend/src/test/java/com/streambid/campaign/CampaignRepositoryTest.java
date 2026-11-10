@@ -81,13 +81,13 @@ class CampaignRepositoryTest {
         targetingService.replace(email, draft.id(), new CampaignTargetingRequest(
                 java.util.Set.of(com.streambid.platform.StreamingPlatform.TWITCH), 0L));
         drafts.publish(email, draft.id(), new CampaignPublishRequest(1L));
-        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path)).andExpect(status().isOk());
         mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.title").value("Visible campaign"))
                 .andExpect(jsonPath("$.publishedAt").isNotEmpty()).andExpect(jsonPath("$.advertiserId").doesNotExist());
         mvc.perform(get(path).with(user("viewer@example.com"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.platforms[0]").value("TWITCH"));
-        mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")).param("platform", "YOUTUBE"))
+        mvc.perform(get("/api/catalog/campaigns").param("platform", "YOUTUBE"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(0));
         mvc.perform(get("/api/catalog/campaigns").with(user("viewer@example.com")).param("platform", "TWITCH"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.campaigns.length()").value(1));

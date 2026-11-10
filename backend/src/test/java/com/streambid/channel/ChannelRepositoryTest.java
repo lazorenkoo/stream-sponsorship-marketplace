@@ -824,8 +824,22 @@ class ChannelRepositoryTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.channelDescription").value("Variety streams"));
         String path = "/api/catalog/streamers/" + channel.id();
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
-        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
-        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        var jpeg = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(512, 512, java.awt.image.BufferedImage.TYPE_INT_RGB),
+                "jpeg", jpeg);
+        var photo = new org.springframework.mock.web.MockMultipartFile("photo", "profile.jpg", "image/jpeg", jpeg.toByteArray());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart(org.springframework.http.HttpMethod.PUT, "/api/users/me/photo").file(photo)
+                        .with(user("catalog-streamer@example.com")).with(csrf()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(path + "/photo")).andExpect(status().isNotFound());
+        var listing = put("/api/channels/" + channel.id() + "/listing")
+                .with(user("catalog-streamer@example.com")).with(csrf()).contentType("application/json");
+        mvc.perform(listing.content("{\"listed\":true}")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.listed").value(true));
+        mvc.perform(get(path + "/photo")).andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(jpeg.toByteArray()));
+        mvc.perform(get(path)).andExpect(status().isOk());
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.channelId").value(channel.id().toString()))
                 .andExpect(jsonPath("$.channelDescription").value("Variety streams"))
@@ -834,6 +848,12 @@ class ChannelRepositoryTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(1))
                 .andExpect(jsonPath("$.streamers[0].channelDescription").value("Variety streams"))
                 .andExpect(jsonPath("$.hasMore").value(false));
+        mvc.perform(listing.content("{\"listed\":false}")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.listed").value(false));
+        mvc.perform(get(path + "/photo")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/catalog/streamers"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0));
+        mvc.perform(listing.content("{\"listed\":true}")).andExpect(status().isOk());
         credentials.delete(channel.id());
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
         mvc.perform(get("/api/catalog/streamers").with(user("catalog-viewer@example.com")))

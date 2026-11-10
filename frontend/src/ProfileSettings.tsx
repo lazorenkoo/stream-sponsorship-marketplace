@@ -6,15 +6,81 @@ type Channel = { id: string; displayName: string; platform: string; authorizatio
 const field = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2'
 const button = 'rounded-lg px-4 py-2.5 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:opacity-60'
 
-async function write(path: string, method: string, settings?: Settings) {
+async function write(path: string, method: string, payload?: Settings | { listed: boolean }) {
   const csrf = await fetch('/api/auth/csrf', { cache: 'no-store' })
   if (!csrf.ok) throw new Error()
   const { headerName, token } = await csrf.json()
   return fetch(path, {
     method,
     headers: { [headerName]: token, 'Content-Type': 'application/json' },
-    body: settings ? JSON.stringify(settings) : undefined,
+    body: payload ? JSON.stringify(payload) : undefined,
   })
+}
+
+function ChannelVisibility({ channel }: { channel: Channel }) {
+  const path = '/api/channels/' + channel.id + '/listing'
+  const [listed, setListed] = useState<boolean | null>(null)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch(path, { signal: controller.signal, cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok) throw new Error()
+        const listing = await response.json() as { listed: boolean }
+        if (!controller.signal.aborted) setListed(listing.listed)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setError('Could not load marketplace visibility.')
+      })
+    return () => controller.abort()
+  }, [path, retry])
+
+  async function update(visible: boolean) {
+    setPending(true)
+    setError('')
+    try {
+      const response = await write(path, 'PUT', { listed: visible })
+      if (response.status === 409) {
+        setListed(null)
+        setError('Reconnect your channel before showing it in the marketplace.')
+        return
+      }
+      if (!response.ok) throw new Error()
+      const listing = await response.json() as { listed: boolean }
+      setListed(listing.listed)
+    } catch {
+      setError('Could not update marketplace visibility. Try again.')
+    } finally { setPending(false) }
+  }
+
+  const visible = listed === true && !channel.authorizationRequired
+  return (
+    <div className="space-y-2 border-t border-slate-100 pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="break-words text-sm font-medium">{channel.displayName}</p>
+          <p className="text-xs text-slate-600">{channel.platform} · {channel.authorizationRequired ? 'Reconnect required' : 'Connected'}</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <span>Show in marketplace</span>
+          <input type="checkbox" role="switch" checked={visible}
+            aria-label={'Show ' + channel.displayName + ' in marketplace'}
+            disabled={listed === null || pending || channel.authorizationRequired}
+            onChange={event => void update(event.target.checked)} className="peer sr-only" />
+          <span aria-hidden="true" className="relative h-6 w-11 rounded-full bg-slate-400 transition-colors after:absolute after:left-0.5 after:top-0.5 after:size-5 after:rounded-full after:bg-white after:transition-transform peer-checked:bg-sky-700 peer-checked:after:translate-x-5 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-sky-700 peer-disabled:opacity-60" />
+        </label>
+      </div>
+      <p role="status" className="text-xs text-slate-600">
+        {pending ? 'Saving…' : listed === null ? (error ? 'Visibility unavailable' : 'Checking visibility…') : visible ? 'Visible in marketplace' : 'Hidden from marketplace'}
+      </p>
+      {error && <p role="alert" className="text-sm text-red-700">{error}{listed === null && <button
+        type="button" className="ml-2 font-medium underline"
+        onClick={() => { setError(''); setRetry(value => value + 1) }}>Refresh status</button>}</p>}
+    </div>
+  )
 }
 
 export function ProfileSettings() {
@@ -115,9 +181,7 @@ export function ProfileSettings() {
             </div>
             <button type="button" className={button + ' border border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100'} disabled={pending} onClick={connect}>Connect Twitch</button>
           </div>
-          {channels?.map(channel => <p className="break-words text-sm text-slate-700" key={channel.id}>
-            {channel.displayName} · {channel.platform}{channel.authorizationRequired ? ' · Reconnect required' : ''}
-          </p>)}
+          {channels?.map(channel => <ChannelVisibility key={channel.id} channel={channel} />)}
         </section>}
         <div className="flex justify-end px-4 py-3 sm:px-5">
           <button type="submit" form="profile-settings-form"

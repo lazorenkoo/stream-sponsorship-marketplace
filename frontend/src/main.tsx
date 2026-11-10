@@ -11,6 +11,7 @@ createRoot(document.getElementById('root')!).render(
   <div className="min-h-screen bg-sky-50/50">
     <Header />
     {path === '/' && <StreamerCatalog />}
+    {path === '/campaigns' && <StreamerCatalog campaigns />}
     {path === '/profile' && <ProfileSettings />}
     {(path === '/login' || path === '/register') && <AuthPage register={path === '/register'} />}
   </div>,
