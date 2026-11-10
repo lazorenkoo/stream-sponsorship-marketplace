@@ -121,24 +121,29 @@ class CreativeUploadIntegrationTest {
         }
     }
 
-    @Test
-    void multipartUploadPersistsRealObjectAndPrivateMetadata() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "WEBP, UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=",
+        "GIF, R0lGODlhAgACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAgACAAAIBgABCAQQEAAh+QQBCgABACwAAAAAAgACAIEAAP8AAAAAAAAAAAAIBgABCAQQEAA7"
+    })
+    void multipartUploadPersistsRealObjectAndPrivateMetadata(CreativeFormat format, String encoded) throws Exception {
         UUID owner = UUID.randomUUID(), other = UUID.randomUUID(), admin = UUID.randomUUID();
         users.save(new UserAccount(owner, "real-upload@example.com", "hash", "Advertiser"));
         users.addRole(owner, UserRole.ADVERTISER);
         users.save(new UserAccount(other, "other-upload@example.com", "hash", "Other"));
         users.save(new UserAccount(admin, "upload-admin@example.com", "hash", "Moderator"));
         users.addRole(admin, UserRole.ADMIN);
-        byte[] bytes = java.util.Base64.getDecoder().decode("UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=");
+        byte[] bytes = java.util.Base64.getDecoder().decode(encoded);
         try {
             var result = mvc.perform(multipart("/api/creatives").file(new MockMultipartFile("file", "banner.jpg", "image/jpeg", bytes))
                     .param("title", "Real upload").with(user("real-upload@example.com")).with(csrf()))
                     .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("PENDING")).andReturn();
             UUID id = UUID.fromString(json.readTree(result.getResponse().getContentAsString()).get("id").asText());
             assertThat(creatives.findOwned(id, owner)).isPresent();
-            assertThat(storage.read(id, CreativeFormat.WEBP)).containsExactly(bytes);
+            assertThat(storage.read(id, format)).containsExactly(bytes);
             mvc.perform(get("/api/creatives/" + id + "/content").with(user("real-upload@example.com")))
-                    .andExpect(status().isOk()).andExpect(content().bytes(bytes)).andExpect(header().string("Cache-Control", "no-store"));
+                    .andExpect(status().isOk()).andExpect(content().contentType(format.contentType()))
+                    .andExpect(content().bytes(bytes)).andExpect(header().string("Cache-Control", "no-store"));
             mvc.perform(get("/api/creatives/" + id + "/content").with(user("other-upload@example.com")))
                     .andExpect(status().isNotFound());
             String preview = "/api/admin/creatives/" + id + "/content";

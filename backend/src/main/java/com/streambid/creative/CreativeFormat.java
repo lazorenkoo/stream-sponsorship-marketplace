@@ -1,7 +1,7 @@
 package com.streambid.creative;
 
 public enum CreativeFormat {
-    PNG("image/png", "png"), JPEG("image/jpeg", "jpg"), WEBP("image/webp", "webp");
+    PNG("image/png", "png"), JPEG("image/jpeg", "jpg"), WEBP("image/webp", "webp"), GIF("image/gif", "gif");
     private final String contentType;
     private final String extension;
 

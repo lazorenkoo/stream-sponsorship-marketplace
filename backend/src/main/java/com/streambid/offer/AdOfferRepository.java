@@ -200,17 +200,17 @@ public class AdOfferRepository {
     private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit) {
         return database.fetch("""
                 SELECT o.id, o.placement_id, o.status, o.version, o.current_revision,
-                    o.created_at AS offer_created_at, o.updated_at, r.*
+                    o.created_at AS offer_created_at, o.updated_at, r.proposed_by <> ? AS recipient, r.*
                 FROM ad_offers o JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
                 WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
                   AND (CAST(? AS uuid) IS NULL OR o.id = ?)
                   AND (CAST(? AS uuid) IS NULL OR o.id > ?)
                 ORDER BY o.id LIMIT ?
-                """, actor, actor, id, id, after, after, limit).map(row -> {
+                """, actor, actor, actor, id, id, after, after, limit).map(row -> {
             return new OfferView(row.get("id", UUID.class), row.get("placement_id", UUID.class),
                     OfferStatus.valueOf(row.get("status", String.class)), row.get("version", Long.class),
                     row.get("current_revision", Long.class), terms(row), row.get("offer_created_at", OffsetDateTime.class).toInstant(),
-                    row.get("updated_at", OffsetDateTime.class).toInstant());
+                    row.get("updated_at", OffsetDateTime.class).toInstant(), row.get("recipient", Boolean.class));
         });
     }
 

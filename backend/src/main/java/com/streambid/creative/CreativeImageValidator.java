@@ -10,6 +10,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Locale;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import org.w3c.dom.Element;
 import javax.imageio.stream.MemoryCacheImageInputStream;
 import org.springframework.stereotype.Component;
 
@@ -27,15 +29,22 @@ public class CreativeImageValidator {
                 reader.setInput(input);
                 var format = CreativeFormat.valueOf(reader.getFormatName().toUpperCase(Locale.ROOT));
                 int width = reader.getWidth(0), height = reader.getHeight(0);
+                if (format == CreativeFormat.GIF) {
+                    var screen = ByteBuffer.wrap(bytes, 6, 4).order(ByteOrder.LITTLE_ENDIAN);
+                    width = Short.toUnsignedInt(screen.getShort());
+                    height = Short.toUnsignedInt(screen.getShort());
+                }
                 if (width < 1 || height < 1 || width > 8192 || height > 8192 || (long) width * height > 40000000) {
                     throw new IllegalArgumentException("Image dimensions exceed the allowed bounds");
                 }
-                requireStatic(bytes, format);
-                if (reader.getNumImages(true) != 1) throw new IllegalArgumentException("Only static images are supported");
                 reader.addIIOReadWarningListener((source, warning) -> { throw new IllegalArgumentException("Damaged image"); });
-                var image = reader.read(0);
-                if (image == null) throw new IllegalArgumentException("Image could not be decoded");
-                image.flush();
+                if (format == CreativeFormat.GIF) {
+                    validateGif(bytes, reader, width, height);
+                } else {
+                    requireStatic(bytes, format);
+                    if (reader.getNumImages(true) != 1) throw new IllegalArgumentException("Only static images are supported for this format");
+                    decodeFrame(reader, 0);
+                }
                 var digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
                 return new VerifiedImage(format, width, height, bytes.length, digest);
             } finally {
@@ -46,6 +55,32 @@ public class CreativeImageValidator {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
+    }
+
+    private void validateGif(byte[] bytes, ImageReader reader, int width, int height) throws IOException {
+        if (bytes[bytes.length - 1] != 0x3b) throw new IllegalArgumentException("Missing GIF ending");
+        int frames = reader.getNumImages(true);
+        if (frames < 1 || frames > 200 || (frames > 1 && (long) width * height * frames > 120000000)) {
+            throw new IllegalArgumentException("GIF animation exceeds the allowed bounds");
+        }
+        for (int index = 0; index < frames; index++) {
+            var metadata = (Element) reader.getImageMetadata(index).getAsTree("javax_imageio_gif_image_1.0");
+            var descriptor = (Element) metadata.getElementsByTagName("ImageDescriptor").item(0);
+            int left = Integer.parseInt(descriptor.getAttribute("imageLeftPosition"));
+            int top = Integer.parseInt(descriptor.getAttribute("imageTopPosition"));
+            int frameWidth = reader.getWidth(index);
+            int frameHeight = reader.getHeight(index);
+            if (frameWidth < 1 || frameHeight < 1 || frameWidth > width - left || frameHeight > height - top) {
+                throw new IllegalArgumentException("GIF frame exceeds the canvas");
+            }
+            decodeFrame(reader, index);
+        }
+    }
+
+    private void decodeFrame(ImageReader reader, int index) throws IOException {
+        var image = reader.read(index);
+        if (image == null) throw new IllegalArgumentException("Image could not be decoded");
+        image.flush();
     }
 
     private void requireStatic(byte[] bytes, CreativeFormat format) {

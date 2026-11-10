@@ -1,3 +1,4 @@
+import { postJson } from './offerApi'
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import type { Placement } from './StreamerDetails'
 
@@ -10,19 +11,6 @@ type ReservationPage = { reservations: { rectangle: Rectangle }[]; nextCursor: s
 const canvasSize = 10000
 const input = 'block w-full rounded-lg border border-slate-300 px-3 py-2'
 const primary = 'rounded-lg bg-sky-700 px-4 py-2 font-semibold text-white disabled:opacity-50'
-
-async function post(path: string, body: object): Promise<Draft> {
-  const csrf = await fetch('/api/auth/csrf', { cache: 'no-store' })
-  if (!csrf.ok) throw new Error()
-  const { headerName, token } = await csrf.json()
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { [headerName]: token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(String(response.status))
-  return response.json()
-}
 
 function overlaps(a: Rectangle, b: Rectangle) {
   return a.x < b.x + b.width && b.x < a.x + a.width
@@ -116,13 +104,13 @@ export function OfferForm({ channelId, placement, close }: { channelId: string; 
     setError('')
     let saved = draft
     try {
-      saved ??= await post('/api/offers', { placementId: placement.id, terms: {
+      saved ??= await postJson<Draft>('/api/offers', { placementId: placement.id, terms: {
         creativeId: data.get('creativeId'), price: placement.negotiable ? data.get('price') : placement.minimumPrice,
         currency: placement.currency, durationSeconds: seconds, mode: 'SCHEDULED',
         startsAt: new Date(startsAt).toISOString(), advertisingCategory: data.get('category'), rectangle,
       } })
       setDraft(saved)
-      await post('/api/offers/' + saved.id + '/send', { expectedVersion: saved.version })
+      await postJson('/api/offers/' + saved.id + '/send', { expectedVersion: saved.version })
       setSent(true)
     } catch (failure) {
       setError(saved
@@ -158,7 +146,7 @@ export function OfferForm({ channelId, placement, close }: { channelId: string; 
           <label>Price ({placement.currency})<input type="number" name="price" required min={0} max={9999999999.99}
             step="0.01" className={input} readOnly={!placement.negotiable} defaultValue={placement.minimumPrice.toFixed(2)} /></label>
         </fieldset>
-        {creatives?.length === 0 && <p>No approved creatives are available on this account.</p>}
+        {creatives?.length === 0 && <p>No approved creatives are available. <a className="text-sky-800 underline" href="/creatives">Manage creatives</a></p>}
         <p className="text-sm">Drag to draw an ad area. Red areas are reserved for the selected time.</p>
         <svg viewBox="0 0 10000 10000" preserveAspectRatio="none" aria-label="Stream layout"
           className="block aspect-video w-full touch-none cursor-crosshair rounded-lg bg-slate-100"

@@ -52,8 +52,8 @@ export function AuthPage({ register }: { register: boolean }) {
             {register && <label className="block">Name
               <input className={inputClass} name="displayName" autoComplete="nickname" maxLength={80} required />
             </label>}
-            <label className="block">Email
-              <input className={inputClass} name="email" type="email" autoComplete="username" maxLength={254} required />
+            <label className="block">{register ? 'Email' : 'Email or username'}
+              <input className={inputClass} name="email" type={register ? 'email' : 'text'} autoComplete="username" maxLength={254} required />
             </label>
             <label className="block">Password
               <input className={inputClass} name="password" type="password" autoComplete={register ? 'new-password' : 'current-password'}
