@@ -822,6 +822,12 @@ class ChannelRepositoryTest {
                                 {"displayName":"Catalog Streamer","channelDescription":"  Variety streams  "}
                                 """))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.channelDescription").value("Variety streams"));
+        var now = java.time.Instant.now();
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                now.minusSeconds(120), com.streambid.platform.StreamState.LIVE, 24L));
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                now.minusSeconds(60), com.streambid.platform.StreamState.OFFLINE, null));
+        String audience = "$.audience['" + channel.id() + "']";
         String path = "/api/catalog/streamers/" + channel.id();
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
         var jpeg = new java.io.ByteArrayOutputStream();
@@ -847,17 +853,23 @@ class ChannelRepositoryTest {
         mvc.perform(get("/api/catalog/streamers").with(user("catalog-viewer@example.com")).param("platform", "TWITCH"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(1))
                 .andExpect(jsonPath("$.streamers[0].channelDescription").value("Variety streams"))
-                .andExpect(jsonPath("$.hasMore").value(false));
+                .andExpect(jsonPath("$.hasMore").value(false))
+                .andExpect(jsonPath(audience + ".state").value("OFFLINE"))
+                .andExpect(jsonPath(audience + ".averageViewers").value(24))
+                .andExpect(jsonPath(audience + ".peakViewers").value(24))
+                .andExpect(jsonPath(audience + ".viewerSamples").value(1));
         mvc.perform(listing.content("{\"listed\":false}")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.listed").value(false));
         mvc.perform(get(path + "/photo")).andExpect(status().isNotFound());
         mvc.perform(get("/api/catalog/streamers"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0))
+                .andExpect(jsonPath(audience).doesNotExist());
         mvc.perform(listing.content("{\"listed\":true}")).andExpect(status().isOk());
         credentials.delete(channel.id());
         mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
         mvc.perform(get("/api/catalog/streamers").with(user("catalog-viewer@example.com")))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0))
+                .andExpect(jsonPath(audience).doesNotExist());
     }
     @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
     @Autowired com.streambid.campaign.ParticipationEventRepository participationEvents;
