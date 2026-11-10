@@ -226,12 +226,12 @@ class TwitchOAuthFlowTest {
         server.expect(requestTo("https://example.test/helix/users")).andRespond(withSuccess("""
                 {"data":[{"id":"verified-channel","display_name":"Streamer"}]}
                 """, MediaType.APPLICATION_JSON));
-        var result = mvc.perform(get("/api/channels/connect/twitch/callback").session(session)
+        mvc.perform(get("/api/channels/connect/twitch/callback").session(session).accept(MediaType.TEXT_HTML)
                 .param("code", "private-code").param("state", state))
-                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(status().isSeeOther()).andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().string("Referrer-Policy", "no-referrer"))
-                .andExpect(jsonPath("$.externalChannelId").value("verified-channel")).andReturn();
-        assertThat(result.getResponse().getContentAsString()).doesNotContain("private-access", "private-refresh");
+                .andExpect(header().string("Location", "/profile?twitch=connected"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(""));
         var channel = channels.findByUser(owner.id()).getFirst();
         var stored = credentials.find(channel.id()).orElseThrow();
         assertThat(cipher.decrypt(stored.accessTokenCiphertext(), channel.id() + ":access")).isEqualTo("private-access");
@@ -239,6 +239,9 @@ class TwitchOAuthFlowTest {
         assertThat(context.getAuthentication().getAuthorities()).extracting("authority").contains("ROLE_STREAMER");
         mvc.perform(get("/api/channels/connect/twitch/callback").session(session)
                 .param("code", "private-code").param("state", state)).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/channels/connect/twitch/callback").session(session).accept(MediaType.TEXT_HTML)
+                .param("code", "private-code").param("state", state))
+                .andExpect(status().isSeeOther()).andExpect(header().string("Location", "/profile?twitch=failed"));
         assertThat(channels.findByUser(owner.id())).hasSize(1);
         server.verify();
     }

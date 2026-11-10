@@ -88,11 +88,17 @@ export function ProfileSettings() {
   const [channels, setChannels] = useState<Channel[] | null>(null)
   const [streamer, setStreamer] = useState(false)
   const [pending, setPending] = useState(false)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const twitchResult = new URLSearchParams(window.location.search).get('twitch')
+  const [message, setMessage] = useState(twitchResult === 'connected' ? 'Twitch channel connected.' : '')
+  const [error, setError] = useState(twitchResult === 'failed' ? 'Could not connect Twitch. Try again.' : '')
   const [signedOut, setSignedOut] = useState(false)
 
   useEffect(() => {
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('twitch')) {
+      url.searchParams.delete('twitch')
+      window.history.replaceState(window.history.state, '', url)
+    }
     const controller = new AbortController()
     async function load() {
       const options = { signal: controller.signal, cache: 'no-store' as const }
@@ -136,7 +142,7 @@ export function ProfileSettings() {
     setMessage('')
     try {
       const response = await write('/api/channels/connect/twitch', 'POST')
-      if (response.status === 404) {
+      if (response.status === 404 || response.status === 503) {
         setError('Twitch connection is unavailable on this server.')
         return
       }
