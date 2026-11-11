@@ -1,0 +1,94 @@
+package com.streambid.offer;
+
+import com.streambid.user.UserRepository;
+import java.time.Clock;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class AdOfferService {
+    private final AdOfferRepository offers;
+    private final UserRepository users;
+    private final Clock clock = Clock.systemUTC();
+
+    public AdOfferService(AdOfferRepository offers, UserRepository users) {
+        this.offers = offers;
+        this.users = users;
+    }
+
+    @Transactional
+    public OfferView create(String email, CreateOfferRequest request) {
+        UUID actor = actor(email);
+        if (!users.findRoles(actor).contains("ADVERTISER")) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        UUID id = offers.createDraft(UUID.randomUUID(), actor, request.placementId(), request.terms(), clock.instant())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Placement or creative is unavailable"));
+        offers.recordEvent(id, actor);
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
+    @Transactional
+    public OfferView send(String email, UUID id, OfferVersionRequest request) {
+        UUID actor = actor(email);
+        if (!users.findRoles(actor).contains("ADVERTISER")) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!offers.sendDraft(id, actor, request.expectedVersion(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Offer changed or placement conditions are unavailable");
+        }
+        offers.recordEvent(id, actor);
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
+    @Transactional
+    public OfferView counter(String email, UUID id, CounterOfferRequest request) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!offers.counter(id, actor, request.expectedVersion(), request.terms(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only the current recipient can revise eligible offer terms");
+        }
+        offers.recordEvent(id, actor);
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
+    @Transactional
+    public OfferView close(String email, UUID id, CloseOfferRequest request) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!offers.close(id, actor, request.action(), request.expectedVersion(), clock.instant())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Offer changed or action is unavailable to this participant");
+        }
+        offers.recordEvent(id, actor);
+        return offers.findForParty(id, actor).orElseThrow();
+    }
+
+    public OfferView find(String email, UUID id) {
+        return offers.findForParty(id, actor(email)).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    public List<OfferView> list(String email, UUID after, int limit) {
+        UUID actor = actor(email);
+        if (limit < 1 || limit > 100) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid offer limit");
+        return offers.listForParty(actor, after, limit);
+    }
+
+    public List<OfferRevisionView> revisions(String email, UUID id, Long before, int limit) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100 || (before != null && before < 0)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
+        return offers.revisionsForParty(id, actor, before, limit);
+    }
+
+    public List<OfferEventView> events(String email, UUID id, Long before, int limit) {
+        UUID actor = actor(email);
+        offers.findForParty(id, actor).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (limit < 1 || limit > 100 || (before != null && before < 0)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
+        return offers.eventsForParty(id, actor, before, limit);
+    }
+
+    private UUID actor(String email) {
+        return users.findByEmail(email).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)).id();
+    }
+}

@@ -30,6 +30,19 @@ public class UserRepository {
                         record.get(PASSWORD), record.get(NAME)));
     }
 
+    public record ProfileSettings(String displayName, String coverUrl, String channelDescription) {}
+
+    public Optional<ProfileSettings> profileSettings(String email) {
+        return database.fetchOptional("SELECT display_name, cover_url, channel_description FROM users WHERE email = ?", email)
+                .map(row -> new ProfileSettings(row.get("display_name", String.class), row.get("cover_url", String.class),
+                        row.get("channel_description", String.class)));
+    }
+
+    public boolean updateProfileSettings(String email, String name, String coverUrl, String channelDescription) {
+        return database.execute("UPDATE users SET display_name = ?, cover_url = ?, channel_description = ? WHERE email = ?",
+                name, coverUrl, channelDescription, email) == 1;
+    }
+
     public List<String> findRoles(UUID userId) {
         return database.select(DSL.field(DSL.name("role"), String.class))
                 .from(DSL.table(DSL.name("user_roles")))

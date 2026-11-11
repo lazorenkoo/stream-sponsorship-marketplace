@@ -36,6 +36,439 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 @Transactional
 class UserRepositoryTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.streambid.creative.S3CreativeStorage creativeObjects;
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void advertiserUploadsActualImageWithoutTrustingFilenameOrMimeType() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "creative-http@example.com", "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        byte[] bytes = java.util.Base64.getDecoder().decode("UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQslKUtv+BiOh/AAA=");
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(other, "creative-http-other@example.com", "hash", "Other"));
+        var file = new org.springframework.mock.web.MockMultipartFile("file", "../../fake.jpg", "text/plain", bytes);
+        try {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
+                    .file(file).param("title", "Banner").with(user("creative-http@example.com")).with(csrf()))
+                    .andExpect(status().isCreated()).andExpect(jsonPath("$.format").value("WEBP"))
+                    .andExpect(jsonPath("$.widthPx").value(2)).andExpect(jsonPath("$.status").value("PENDING"))
+                    .andExpect(jsonPath("$.storageKey").doesNotExist()).andExpect(jsonPath("$.sha256").doesNotExist());
+            assertThat(creatives.listOwned(owner, null, 20)).hasSize(1);
+            var saved = creatives.listOwned(owner, null, 20).getFirst();
+            String path = "/api/creatives/" + saved.id();
+            mvc.perform(get(path).with(user("creative-http@example.com"))).andExpect(status().isOk());
+            mvc.perform(get(path).with(user("creative-http-other@example.com"))).andExpect(status().isNotFound());
+            mvc.perform(get("/api/creatives").with(user("creative-http-other@example.com")))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+            org.mockito.Mockito.when(creativeObjects.read(saved.id(), saved.format())).thenReturn(bytes);
+            mvc.perform(get(path + "/content").with(user("creative-http@example.com"))).andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(bytes))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("Content-Type", "image/webp"));
+            mvc.perform(get(path + "/content").with(user("creative-http-other@example.com"))).andExpect(status().isNotFound());
+            org.mockito.Mockito.when(creativeObjects.read(saved.id(), saved.format())).thenReturn(new byte[] {1, 2});
+            mvc.perform(get(path + "/content").with(user("creative-http@example.com")))
+                    .andExpect(status().isServiceUnavailable());
+            org.mockito.Mockito.verify(creativeObjects).put(org.mockito.ArgumentMatchers.any(),
+                    org.mockito.ArgumentMatchers.eq(com.streambid.creative.CreativeFormat.WEBP), org.mockito.ArgumentMatchers.eq(bytes));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
+                    .file(file).param("title", "Banner").with(user("creative-http@example.com")))
+                    .andExpect(status().isForbidden());
+            var invalid = new org.springframework.mock.web.MockMultipartFile("file", "image.png", "image/png", new byte[0]);
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/creatives")
+                    .file(invalid).param("title", "Banner").with(user("creative-http@example.com")).with(csrf()))
+                    .andExpect(status().isBadRequest());
+            assertThat(creatives.listOwned(owner, null, 20)).hasSize(1);
+        } finally {
+            for (var creative : creatives.listOwned(owner, null, 100)) {
+                creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", creative.id());
+            }
+            creativeDatabase.execute("DELETE FROM users WHERE id IN (?, ?)", owner, other);
+        }
+    }
+    @Autowired org.jooq.DSLContext creativeDatabase;
+    @Autowired com.streambid.creative.AdCreativeRepository creatives;
+    @Autowired com.streambid.creative.CreativeUploadIntentRepository uploadIntents;
+    @Test
+    void cleanupClaimPreventsLateUploadMetadataCommit() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "upload-fence@example.com", "hash", "Advertiser"));
+        var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
+        var creative = new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, now);
+        uploadIntents.create(creative.id(), creative.format(), now);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3600), 10)).hasSize(1);
+        assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
+        assertThat(creatives.find(creative.id())).isEmpty();
+        uploadIntents.complete(creative.id());
+        assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Autowired com.streambid.offer.AdOfferRepository offers;
+    @Test
+    void offerDraftUsesUploadedCreativeAndKeepsPreviewPrivate() throws Exception {
+        UUID advertiser = UUID.randomUUID(), streamer = UUID.randomUUID(), channel = UUID.randomUUID(), placement = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "offer-advertiser@example.com", "hash", "Advertiser"));
+        users.save(new UserAccount(streamer, "offer-streamer@example.com", "hash", "Streamer"));
+        users.addRole(advertiser, UserRole.ADVERTISER);
+        creativeDatabase.execute("""
+                INSERT INTO connected_channels(id, user_id, platform, external_channel_id, display_name, verified_at)
+                VALUES (?, ?, 'TWITCH', ?, 'Offer streamer', CURRENT_TIMESTAMP)
+                """, channel, streamer, channel.toString());
+        creativeDatabase.execute("INSERT INTO channel_listings(channel_id, listed) VALUES (?, TRUE)", channel);
+        creativeDatabase.execute("""
+                INSERT INTO channel_credentials VALUES (?, 'v1.test', 'v1.test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, channel);
+        creativeDatabase.execute("""
+                INSERT INTO ad_placements(id, channel_id, title, position, width_px, height_px, duration_seconds,
+                    minimum_price, currency, negotiable, capacity, active, created_at, updated_at)
+                VALUES (?, ?, 'Banner', 'Custom', 320, 180, 60, 10, 'PLN', TRUE, 1, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, placement, channel);
+        var now = java.time.Instant.now();
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), advertiser, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, now));
+        var terms = new com.streambid.offer.OfferTerms(creative.id(), new java.math.BigDecimal("350"), "PLN", 5400,
+                com.streambid.offer.OfferMode.FLEXIBLE, null, "gaming", new com.streambid.offer.OfferRectangle(1000, 2000, 3000, 4000));
+        UUID id = UUID.randomUUID();
+        assertThat(offers.createDraft(id, advertiser, placement, terms, now)).contains(id);
+        assertThat(offers.existsForParty(id, advertiser)).isTrue();
+        assertThat(offers.existsForParty(id, streamer)).isFalse();
+        var view = offers.findForParty(id, advertiser).orElseThrow();
+        assertThat(view.status()).isEqualTo(com.streambid.offer.OfferStatus.DRAFT);
+        assertThat(view.terms()).isEqualTo(terms);
+        assertThat(offers.listForParty(advertiser, null, 20)).containsExactly(view);
+        assertThat(offers.listForParty(advertiser, id, 20)).isEmpty();
+        assertThat(offers.listForParty(streamer, null, 20)).isEmpty();
+        assertThatThrownBy(() -> offers.listForParty(advertiser, null, 101)).isInstanceOf(IllegalArgumentException.class);
+        creativeDatabase.execute("UPDATE ad_offers SET status = 'PENDING', sent_at = created_at WHERE id = ?", id);
+        assertThat(offers.findForParty(id, streamer)).isPresent();
+        assertThat(offers.listForParty(streamer, null, 20)).hasSize(1);
+        String sentPreview = "/api/offers/" + id + "/revisions/0/creative";
+        mvc.perform(get(sentPreview).with(user("offer-streamer@example.com"))).andExpect(status().isServiceUnavailable());
+        users.save(new UserAccount(UUID.randomUUID(), "offer-outsider@example.com", "hash", "Outsider"));
+        mvc.perform(get(sentPreview).with(user("offer-outsider@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/offers/" + id + "/revisions/1/creative").with(user("offer-streamer@example.com")))
+                .andExpect(status().isNotFound());
+        assertThat(offers.revisionsForParty(id, advertiser, null, 20).getFirst().terms()).isEqualTo(terms);
+        assertThat(offers.revisionsForParty(id, UUID.randomUUID(), null, 20)).isEmpty();
+        assertThat(offers.revisionsForParty(id, streamer, 0L, 20)).isEmpty();
+        creativeDatabase.connection(connection -> {
+            var savepoint = connection.setSavepoint();
+            try (var statement = connection.prepareStatement("UPDATE ad_offer_revisions SET price = 1 WHERE offer_id = ?")) {
+                statement.setObject(1, id);
+                assertThatThrownBy(statement::executeUpdate).isInstanceOf(java.sql.SQLException.class);
+            } finally {
+                connection.rollback(savepoint);
+                connection.releaseSavepoint(savepoint);
+            }
+        });
+        assertThat(offers.findForParty(id, advertiser).orElseThrow().terms().price()).isEqualByComparingTo("350.00");
+
+        assertThat(offers.existsForParty(id, UUID.randomUUID())).isFalse();
+        var revision = creativeDatabase.fetchSingle("SELECT * FROM ad_offer_revisions WHERE offer_id = ?", id);
+        assertThat(revision.get("rectangle_x", Integer.class)).isEqualTo(1000);
+        assertThat(revision.get("rectangle_width", Integer.class)).isEqualTo(3000);
+        assertThat(revision.get("price", java.math.BigDecimal.class)).isEqualByComparingTo("350.00");
+        assertThat(offers.createDraft(UUID.randomUUID(), streamer, placement, terms, now)).isEmpty();
+        String body = json.writeValueAsString(new com.streambid.offer.CreateOfferRequest(placement, terms));
+        var response = mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("DRAFT")).andExpect(jsonPath("$.terms.rectangle.x").value(1000)).andReturn();
+        String location = response.getResponse().getHeader("Location");
+        mvc.perform(get(location + "/revisions").with(user("offer-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].proposedByRole").value("ADVERTISER"));
+        mvc.perform(get(location + "/revisions").with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        String preview = location + "/revisions/0/creative";
+        mvc.perform(get(preview).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        String send = location + "/send";
+        mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
+        creativeDatabase.execute("""
+                INSERT INTO placement_availability VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '2 hours')
+                """, UUID.randomUUID(), placement);
+        mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
+
+        mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.advertiser").value(true)).andExpect(jsonPath("$.recipient").value(false));
+        mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.advertiser").value(false)).andExpect(jsonPath("$.recipient").value(true));
+        mvc.perform(post(location + "/close").with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of(
+                        "expectedVersion", 1, "action", "WITHDRAW")))).andExpect(status().isConflict());
+        UUID sentId = UUID.fromString(location.substring(location.lastIndexOf('/') + 1));
+        var counter = new com.streambid.offer.OfferTerms(creative.id(), new java.math.BigDecimal("400"), "PLN", 3600,
+                com.streambid.offer.OfferMode.FLEXIBLE, null, "gaming", new com.streambid.offer.OfferRectangle(2000, 1000, 3000, 4000));
+        users.addRole(streamer, UserRole.STREAMER);
+        assertThat(offers.counter(sentId, advertiser, 1, counter, now)).isFalse();
+        assertThat(offers.counter(sentId, streamer, 1, counter, now)).isTrue();
+        assertThat(offers.counter(sentId, advertiser, 1, terms, now)).isFalse();
+        assertThat(offers.counter(sentId, streamer, 2, terms, now)).isFalse();
+        var countered = offers.findForParty(sentId, advertiser).orElseThrow();
+        assertThat(countered.status()).isEqualTo(com.streambid.offer.OfferStatus.COUNTERED);
+        assertThat(countered.revision()).isEqualTo(1);
+        assertThat(countered.terms()).isEqualTo(counter);
+        var history = offers.revisionsForParty(sentId, advertiser, null, 20);
+        assertThat(history).hasSize(2);
+        assertThat(history.get(1).terms()).isEqualTo(terms);
+
+        String counterPath = location + "/counter";
+        String counterBody = json.writeValueAsString(new com.streambid.offer.CounterOfferRequest(2L, terms));
+        mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(counterBody))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(3))
+                .andExpect(jsonPath("$.revision").value(2)).andExpect(jsonPath("$.status").value("PENDING"));
+        mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(counterBody)).andExpect(status().isConflict());
+        String replyBody = json.writeValueAsString(new com.streambid.offer.CounterOfferRequest(3L, counter));
+        mvc.perform(post(counterPath).with(user("offer-streamer@example.com"))
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isForbidden());
+        mvc.perform(post(counterPath).with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":null,\"terms\":null}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post(counterPath).with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(3))
+                .andExpect(jsonPath("$.terms.rectangle.x").value(2000));
+        mvc.perform(get(location + "/revisions").with(user("offer-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].proposedByRole").value("STREAMER"));
+        String closePath = location + "/close";
+        String reject = "{\"action\":\"REJECT\",\"expectedVersion\":4}";
+        mvc.perform(post(closePath).with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(reject)).andExpect(status().isConflict());
+        mvc.perform(post(closePath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(reject))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.version").value(5));
+        mvc.perform(post(counterPath).with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isConflict());
+        assertThat(offers.revisionsForParty(sentId, advertiser, null, 20)).hasSize(4);
+        var events = creativeDatabase.fetch("SELECT * FROM ad_offer_events WHERE offer_id = ? ORDER BY version", sentId);
+        assertThat(events.getValues("version", Long.class)).containsExactly(0L, 1L, 3L, 4L, 5L);
+        assertThat(events.getValues("status", String.class)).containsExactly("DRAFT", "PENDING", "PENDING", "COUNTERED", "REJECTED");
+        assertThat(events.get(3).get("actor_id", UUID.class)).isEqualTo(streamer);
+        assertThat(events.get(4).get("revision", Long.class)).isEqualTo(3);
+        String eventPath = location + "/events";
+        mvc.perform(get(eventPath).with(user("offer-streamer@example.com")).param("limit", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].status").value("REJECTED"))
+                .andExpect(jsonPath("$[0].actorRole").value("ADVERTISER"))
+                .andExpect(jsonPath("$[0].actorId").doesNotExist());
+        mvc.perform(get(eventPath).with(user("offer-advertiser@example.com")).param("beforeVersion", "4"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].version").value(3));
+        mvc.perform(get(eventPath).with(user("offer-advertiser@example.com")).param("beforeVersion", "-1"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(eventPath)).andExpect(status().isUnauthorized());
+        assertThat(offers.eventsForParty(sentId, UUID.randomUUID(), null, 20)).isEmpty();
+
+
+        UUID withdrawn = offers.createDraft(UUID.randomUUID(), advertiser, placement, terms, now).orElseThrow();
+        mvc.perform(post("/api/offers/" + withdrawn + "/close").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"WITHDRAW\",\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("WITHDRAWN"));
+        mvc.perform(get("/api/offers/" + withdrawn).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/offers/" + withdrawn + "/events").with(user("offer-streamer@example.com")))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/offers/" + withdrawn + "/revisions").with(user("offer-streamer@example.com")))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/api/offers/" + UUID.randomUUID() + "/counter").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(replyBody)).andExpect(status().isNotFound());
+
+        mvc.perform(post("/api/offers").with(user("offer-streamer@example.com").roles("ADVERTISER")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com"))
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("limit", "101"))
+                .andExpect(status().isBadRequest());
+
+    }
+
+    @Autowired org.springframework.transaction.PlatformTransactionManager creativeTransactions;
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void uploadCompletionAndCleanupSerializeOnIntentRow() throws Exception {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "upload-race@example.com", "hash", "Advertiser"));
+        var now = java.time.Instant.now().minusSeconds(7200);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(creativeTransactions);
+        try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            for (boolean cleanupFirst : new boolean[] {false, true}) {
+                UUID id = UUID.randomUUID();
+                var creative = new com.streambid.creative.AdCreative(id, owner, "Race",
+                        com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                        com.streambid.creative.CreativeStatus.PENDING, 0, now);
+                uploadIntents.create(id, creative.format(), now);
+                var locked = new java.util.concurrent.CountDownLatch(1);
+                var release = new java.util.concurrent.CountDownLatch(1);
+                var contenderStarted = new java.util.concurrent.CountDownLatch(1);
+                try {
+                    var holder = executor.submit(() -> transaction.executeWithoutResult(status -> {
+                        creativeDatabase.fetch("SELECT creative_id FROM creative_upload_intents WHERE creative_id = ? FOR UPDATE", id);
+                        if (cleanupFirst) uploadIntents.claimExpired(java.time.Instant.now(), 5);
+                        else creatives.finishUpload(creative);
+                        locked.countDown();
+                        try {
+                            if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Release timed out");
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(interrupted);
+                        }
+                    }));
+                    assertThat(locked.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                    var contender = executor.submit(() -> {
+                        contenderStarted.countDown();
+                        if (cleanupFirst) {
+                            assertThatThrownBy(() -> creatives.finishUpload(creative)).isInstanceOf(IllegalStateException.class);
+                        } else {
+                            assertThat(uploadIntents.claimExpired(java.time.Instant.now(), 5)).isEmpty();
+                        }
+                    });
+                    assertThat(contenderStarted.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                    release.countDown();
+                    holder.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    contender.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    assertThat(creatives.find(id).isPresent()).isEqualTo(!cleanupFirst);
+                } finally {
+                    release.countDown();
+                    creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", id);
+                    uploadIntents.complete(id);
+                }
+            }
+        } finally {
+            creativeDatabase.execute("DELETE FROM users WHERE id = ?", owner);
+        }
+    }
+
+    @Test
+    void deletedUploadTombstonesBackOffAndIgnoreStaleLeaseResults() {
+        var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
+        UUID id = UUID.randomUUID();
+        uploadIntents.create(id, com.streambid.creative.CreativeFormat.PNG, now);
+        var first = uploadIntents.claimExpired(now.plusSeconds(3600), 5).getFirst();
+        var second = uploadIntents.claimExpired(now.plusSeconds(3900), 5).getFirst();
+        uploadIntents.retainDeleted(second, now.plusSeconds(3900));
+        uploadIntents.retainDeleted(first, now.plusSeconds(90000));
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(90299), 5)).isEmpty();
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(90300), 5)).hasSize(1);
+    }
+
+    @Test
+    void unfinishedUploadCleanupClaimsAreBoundedAndLeased() {
+        var now = java.time.Instant.parse("2026-11-08T00:00:00Z");
+        UUID id = UUID.randomUUID();
+        uploadIntents.create(id, com.streambid.creative.CreativeFormat.WEBP, now);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3599), 10)).isEmpty();
+        var claimed = uploadIntents.claimExpired(now.plusSeconds(3600), 10);
+        assertThat(claimed).hasSize(1);
+        assertThat(claimed.getFirst().creativeId()).isEqualTo(id);
+        assertThat(claimed.getFirst().attempts()).isEqualTo(1);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3601), 10)).isEmpty();
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(3900), 10).getFirst().attempts()).isEqualTo(2);
+        uploadIntents.complete(id);
+        assertThat(uploadIntents.claimExpired(now.plusSeconds(7200), 10)).isEmpty();
+        assertThatThrownBy(() -> uploadIntents.claimExpired(now, 101)).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Autowired com.streambid.creative.CreativeModerationService moderation;
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void reviewEventFailureRollsBackModerationDecision() {
+        UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
+        users.save(new UserAccount(owner, "review-rollback-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(admin, "review-rollback-admin@example.com", "hash", "Admin"));
+        users.addRole(admin, UserRole.ADMIN);
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, java.time.Instant.now()));
+        try {
+            creativeDatabase.execute("""
+                    INSERT INTO creative_review_events(creative_id, version, reviewer_id, status, occurred_at)
+                    VALUES (?, 1, ?, 'APPROVED', CURRENT_TIMESTAMP)
+                    """, creative.id(), admin);
+            var request = new com.streambid.creative.CreativeReviewRequest(com.streambid.creative.CreativeStatus.APPROVED, null, 0L);
+            assertThatThrownBy(() -> moderation.review("review-rollback-admin@example.com", creative.id(), request))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(creatives.findOwned(creative.id(), owner)).contains(creative);
+            assertThat(creatives.reviewsOwned(creative.id(), owner, null, 20)).hasSize(1);
+            creativeDatabase.execute("DELETE FROM creative_review_events WHERE creative_id = ?", creative.id());
+            assertThat(moderation.review("review-rollback-admin@example.com", creative.id(), request).version()).isEqualTo(1);
+            assertThat(creatives.reviewsOwned(creative.id(), owner, null, 20)).hasSize(1);
+        } finally {
+            creativeDatabase.execute("DELETE FROM creative_review_events WHERE creative_id = ?", creative.id());
+            creativeDatabase.execute("DELETE FROM ad_creatives WHERE id = ?", creative.id());
+            creativeDatabase.execute("DELETE FROM users WHERE id IN (?, ?)", owner, admin);
+        }
+    }
+    @Test
+    void moderationHttpRequiresDatabaseAdminAndValidReason() throws Exception {
+        UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
+        users.save(new UserAccount(owner, "review-http-owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(admin, "review-http-admin@example.com", "hash", "Admin"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(admin, UserRole.ADMIN);
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, java.time.Instant.now()));
+        String path = "/api/admin/creatives/" + creative.id() + "/review";
+        String decision = "{\"status\":\"REJECTED\",\"reason\":\"Unsupported advertising content\",\"expectedVersion\":0}";
+        mvc.perform(post(path).with(user("review-http-owner@example.com").roles("ADMIN")).with(csrf())
+                .contentType("application/json").content(decision)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/creatives").with(user("review-http-admin@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(post(path).with(user("review-http-admin@example.com")).with(csrf()).contentType("application/json")
+                .content("{\"status\":\"REJECTED\",\"expectedVersion\":0}")).andExpect(status().isBadRequest());
+        mvc.perform(post(path).with(user("review-http-admin@example.com")).with(csrf())
+                .contentType("application/json").content(decision)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED")).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(path).with(user("review-http-admin@example.com")).with(csrf())
+                .contentType("application/json").content(decision)).andExpect(status().isConflict());
+    }
+    @Test
+    void moderatorDecisionRequiresAdminAndRecordsOneVersionedEvent() {
+        UUID owner = UUID.randomUUID(), admin = UUID.randomUUID();
+        users.save(new UserAccount(owner, "review-owner@example.com", "hash", "Advertiser"));
+        users.save(new UserAccount(admin, "review-admin@example.com", "hash", "Admin"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        users.addRole(admin, UserRole.ADMIN);
+        var creative = creatives.insertPending(new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.PENDING, 0, java.time.Instant.now()));
+        assertThat(creatives.pending(null, 20)).containsExactly(creative);
+        assertThat(creatives.review(creative.id(), owner, com.streambid.creative.CreativeStatus.APPROVED, null, 0, java.time.Instant.now())).isEmpty();
+        assertThat(creatives.review(creative.id(), admin, com.streambid.creative.CreativeStatus.APPROVED, null, 99, java.time.Instant.now())).isEmpty();
+        var reviewed = creatives.review(creative.id(), admin, com.streambid.creative.CreativeStatus.APPROVED, null, 0, java.time.Instant.now()).orElseThrow();
+        assertThat(reviewed.version()).isEqualTo(1);
+        assertThat(reviewed.status()).isEqualTo(com.streambid.creative.CreativeStatus.APPROVED);
+        assertThat(creatives.pending(null, 20)).isEmpty();
+        assertThat(creatives.review(creative.id(), admin, com.streambid.creative.CreativeStatus.REJECTED, "Changed mind", 1, java.time.Instant.now())).isEmpty();
+        assertThat(creativeDatabase.fetchCount(org.jooq.impl.DSL.table("creative_review_events"))).isEqualTo(1);
+    }
+    @Test
+    void creativeMetadataIsOwnerScopedAndAlwaysStartsPending() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "creative-owner@example.com", "hash", "Advertiser"));
+        users.addRole(owner, UserRole.ADVERTISER);
+        var input = new com.streambid.creative.AdCreative(UUID.randomUUID(), owner, "Banner",
+                com.streambid.creative.CreativeFormat.PNG, 320, 180, 100, "a".repeat(64),
+                com.streambid.creative.CreativeStatus.APPROVED, 99, java.time.Instant.now());
+        uploadIntents.create(input.id(), input.format(), input.createdAt());
+        var saved = creatives.insertPending(input);
+        assertThat(creativeDatabase.fetchCount(org.jooq.impl.DSL.table("creative_upload_intents"))).isZero();
+        assertThat(saved.status()).isEqualTo(com.streambid.creative.CreativeStatus.PENDING);
+        assertThat(saved.version()).isZero();
+        assertThat(saved.storageKey()).isEqualTo(input.storageKey());
+        assertThat(creatives.findOwned(saved.id(), owner)).contains(saved);
+        assertThat(creatives.findOwned(saved.id(), UUID.randomUUID())).isEmpty();
+        assertThat(creatives.listOwned(owner, null, 20)).containsExactly(saved);
+        assertThat(creatives.listOwned(owner, saved.id(), 20)).isEmpty();
+        assertThat(creatives.listOwned(UUID.randomUUID(), null, 20)).isEmpty();
+        assertThatThrownBy(() -> creatives.listOwned(owner, null, 101)).isInstanceOf(IllegalArgumentException.class);
+    }
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17");

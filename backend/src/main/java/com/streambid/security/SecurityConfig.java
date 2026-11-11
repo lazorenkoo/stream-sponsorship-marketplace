@@ -3,6 +3,7 @@ package com.streambid.security;
 import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -18,6 +19,9 @@ public class SecurityConfig {
         http.authorizeHttpRequests(requests -> requests
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers("/api/health", "/api/auth/csrf", "/api/auth/register").permitAll()
+                .requestMatchers(HttpMethod.GET,
+                        "/api/catalog/streamers", "/api/catalog/streamers/{id}", "/api/catalog/streamers/{id}/photo",
+                        "/api/catalog/campaigns", "/api/catalog/campaigns/{id}").permitAll()
                 .anyRequest().authenticated());
         http.exceptionHandling(errors -> errors
                 .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));

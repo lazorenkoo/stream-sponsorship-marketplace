@@ -1,0 +1,1605 @@
+package com.streambid.channel;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+
+import com.streambid.platform.StreamingPlatform;
+import com.streambid.user.UserAccount;
+import com.streambid.user.UserRepository;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import java.util.Base64;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import com.streambid.platform.PlatformUnavailableException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import com.streambid.platform.twitch.TwitchCredentialRefresh;
+import com.streambid.platform.twitch.TwitchCodeExchange;
+import com.streambid.platform.twitch.TwitchReauthorizationRequiredException;
+import org.junit.jupiter.api.BeforeEach;
+import static org.mockito.Mockito.*;
+import com.streambid.platform.ChannelInfo;
+import com.streambid.platform.twitch.TwitchConnectionStore;
+import com.streambid.platform.twitch.TwitchUserTokens;
+import java.time.Clock;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.web.server.ResponseStatusException;
+import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
+import com.streambid.security.TokenCipher;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+@SpringBootTest
+@Import(ChannelRepositoryTest.StoreConfiguration.class)
+@AutoConfigureMockMvc
+@Testcontainers
+@Transactional
+class ChannelRepositoryTest {
+
+    @Container
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17");
+
+    @DynamicPropertySource
+    static void databaseProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
+    }
+
+    @Autowired
+    ChannelRepository channels;
+
+    @Autowired
+    UserRepository users;
+
+    @Autowired
+    MockMvc mvc;
+
+    @Autowired
+    ChannelCredentialsRepository credentials;
+
+    @TestConfiguration
+    static class StoreConfiguration {
+        @Bean
+        TwitchCodeExchange tokenExchange() {
+            return mock(TwitchCodeExchange.class);
+        }
+        @Bean
+        TwitchCredentialRefresh refresh(ChannelCredentialsRepository credentials, TwitchCodeExchange exchange) {
+            return new TwitchCredentialRefresh(credentials,
+                    new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), exchange);
+        }
+        @Bean
+        TwitchConnectionStore store(ChannelRepository channels, ChannelCredentialsRepository credentials, UserRepository users,
+                ChannelListingRepository listings) {
+            return new TwitchConnectionStore(channels, credentials, users,
+                    new TokenCipher(Base64.getEncoder().encodeToString(new byte[32])), Clock.systemUTC(), listings);
+        }
+    }
+
+    @Autowired
+    TwitchConnectionStore store;
+
+    @Autowired
+    DSLContext database;
+
+    @Autowired TwitchCredentialRefresh refreshService;
+    @Autowired TwitchCodeExchange exchange;
+
+    @BeforeEach
+    void resetExchangeMock() {
+        reset(exchange);
+    }
+
+    @Autowired ChannelDisconnectService disconnectService;
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void disconnectWaitsForRefreshAndRemovesRotatedCredentials() throws Exception {
+        String email = "disconnect-refresh@example.com";
+        var channel = channelForRefresh(email);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var disconnectStarted = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        var rotated = new TwitchUserTokens("rotated-access", "rotated-refresh",
+                java.time.Instant.now().plusSeconds(3600));
+        when(exchange.refresh("old-refresh")).thenAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Refresh test timed out");
+            }
+            return rotated;
+        });
+        try {
+            var refreshing = executor.submit(() -> refreshService.refreshRejected(channel.id(), "old-access"));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            var disconnecting = executor.submit(() -> {
+                disconnectStarted.countDown();
+                disconnectService.disconnect(channel.id(), email);
+            });
+            assertThat(disconnectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> disconnecting.get(250, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            release.countDown();
+            assertThat(refreshing.get(5, TimeUnit.SECONDS)).isEqualTo(rotated);
+            disconnecting.get(5, TimeUnit.SECONDS);
+            assertThat(credentials.find(channel.id())).isEmpty();
+            assertThat(channels.find(channel.id())).isPresent();
+            assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "rotated-access"))
+                    .isInstanceOf(TwitchReauthorizationRequiredException.class);
+            verify(exchange, times(1)).refresh("old-refresh");
+            assertThat(credentials.find(channel.id())).isEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
+        }
+    }
+    @Autowired com.streambid.statistics.ChannelMeasurementRepository measurements;
+
+    @Test
+    void measurementHistoryIsOwnedPagedAndPreservedAfterDisconnect() {
+        var channel = channelForRefresh("measurements@example.com");
+        var now = java.time.Instant.parse("2026-11-04T10:15:00Z");
+        var first = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), now,
+                com.streambid.platform.StreamState.LIVE, 42L);
+        var second = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), now.plusSeconds(60),
+                com.streambid.platform.StreamState.UNKNOWN, null);
+        assertThat(measurements.saveIfConnected(first)).isTrue();
+        assertThat(measurements.saveIfConnected(first)).isFalse();
+        assertThat(measurements.saveIfConnected(second)).isTrue();
+        assertThat(measurements.history(channel.id(), UUID.randomUUID(), null, 10)).isEmpty();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 1)).containsExactly(second);
+        assertThat(measurements.history(channel.id(), channel.userId(), second.measuredAt(), 10)).containsExactly(first);
+        credentials.delete(channel.id());
+        var afterDisconnect = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                now.plusSeconds(120), com.streambid.platform.StreamState.LIVE, 10L);
+        assertThat(measurements.saveIfConnected(afterDisconnect)).isFalse();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).containsExactly(second, first);
+        assertThatThrownBy(() -> measurements.history(channel.id(), channel.userId(), null, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> measurements.history(channel.id(), channel.userId(), null, 201))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test
+    void collectorCandidatesUseKeysetAndExcludeDisconnectedChannels() {
+        var first = channelForRefresh("candidate-one@example.com");
+        var second = channelForRefresh("candidate-two@example.com");
+        var page = channels.connectedAfter(null, 1);
+        assertThat(page).hasSize(1);
+        var next = channels.connectedAfter(page.getFirst().id(), 1);
+        assertThat(next).hasSize(1);
+        assertThat(java.util.Set.of(page.getFirst().id(), next.getFirst().id()))
+                .containsExactlyInAnyOrder(first.id(), second.id());
+        assertThat(channels.connectedAfter(next.getFirst().id(), 1)).isEmpty();
+        credentials.delete(first.id());
+        assertThat(channels.connectedAfter(null, 200)).containsExactly(second);
+        assertThatThrownBy(() -> channels.connectedAfter(null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> channels.connectedAfter(null, 201)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void databaseRejectsInvalidMeasurementStatesAndViewers() {
+        var channel = channelForRefresh("measurement-constraints@example.com");
+        try {
+            String sql = "INSERT INTO channel_measurements (id, channel_id, measured_at, state, viewers) "
+                    + "VALUES (?, ?, CURRENT_TIMESTAMP, ?, CAST(? AS bigint))";
+            for (Object[] invalid : new Object[][] {{"LIVE", -1L}, {"OFFLINE", 0L}, {"UNKNOWN", 1L}, {"INVALID", null}}) {
+                assertThatThrownBy(() -> database.execute(sql, UUID.randomUUID(), channel.id(), invalid[0], invalid[1]))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            }
+            assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).isEmpty();
+        } finally {
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
+        }
+    }
+    @Test
+    void measurementNanosecondsRoundTripAtDatabasePrecision() {
+        var channel = channelForRefresh("precision@example.com");
+        var instant = java.time.Instant.parse("2026-11-04T11:33:00.123456789Z");
+        var measurement = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), instant,
+                com.streambid.platform.StreamState.LIVE, 0L);
+        assertThat(measurement.measuredAt()).isEqualTo(java.time.Instant.parse("2026-11-04T11:33:00.123456Z"));
+        assertThat(measurements.saveIfConnected(measurement)).isTrue();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).containsExactly(measurement);
+        var sameMicrosecond = new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                instant.plusNanos(100), com.streambid.platform.StreamState.LIVE, 1L);
+        assertThat(measurements.saveIfConnected(sameMicrosecond)).isFalse();
+        assertThat(measurements.history(channel.id(), channel.userId(), instant, 10)).isEmpty();
+        assertThat(measurements.history(channel.id(), channel.userId(), measurement.measuredAt().plusNanos(1000), 10))
+                .containsExactly(measurement);
+    }
+    @Test
+    void measurementApiChecksOwnerAndPagesHistoricalData() throws Exception {
+        var channel = channelForRefresh("history-api@example.com");
+        users.save(new UserAccount(UUID.randomUUID(), "history-foreign@example.com", "hash", "Foreign"));
+        var now = java.time.Instant.parse("2026-11-04T12:20:00Z");
+        for (int index = 0; index < 2; index++) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    now.plusSeconds(index), com.streambid.platform.StreamState.LIVE, (long) index));
+        }
+        String path = "/api/channels/" + channel.id() + "/measurements";
+        credentials.delete(channel.id());
+        mvc.perform(get(path).with(user("history-api@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].viewers").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$[0].accessTokenCiphertext").doesNotExist())
+                .andExpect(jsonPath("$[0].userId").doesNotExist());
+        mvc.perform(get(path).with(user("history-api@example.com")).param("before", now.plusSeconds(1).toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].viewers").value(0));
+        mvc.perform(get(path).with(user("history-foreign@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/channels/" + UUID.randomUUID() + "/measurements")
+                .with(user("history-api@example.com"))).andExpect(status().isNotFound());
+        for (String invalid : java.util.List.of("0", "201", "text")) {
+            mvc.perform(get(path).with(user("history-api@example.com")).param("limit", invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path).with(user("history-api@example.com")).param("before", "invalid-time"))
+                .andExpect(status().isBadRequest());
+    }
+    @Test
+    void statisticsSummaryCountsKnownViewersAndUsesExclusiveEnd() {
+        var channel = channelForRefresh("summary-range@example.com");
+        var from = java.time.Instant.parse("2026-11-04T13:10:00Z");
+        var states = new com.streambid.platform.StreamState[] {
+                com.streambid.platform.StreamState.LIVE, com.streambid.platform.StreamState.LIVE,
+                com.streambid.platform.StreamState.LIVE, com.streambid.platform.StreamState.OFFLINE,
+                com.streambid.platform.StreamState.UNKNOWN, com.streambid.platform.StreamState.LIVE};
+        Long[] viewers = {0L, 10L, null, null, null, 1000L};
+        for (int index = 0; index < states.length; index++) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    from.plusSeconds(index), states[index], viewers[index]));
+        }
+        var summary = measurements.summarize(channel.id(), channel.userId(), from, from.plusSeconds(5));
+        assertThat(summary.totalSamples()).isEqualTo(5);
+        assertThat(summary.liveSamples()).isEqualTo(3);
+        assertThat(summary.offlineSamples()).isEqualTo(1);
+        assertThat(summary.unknownSamples()).isEqualTo(1);
+        assertThat(summary.knownViewerSamples()).isEqualTo(2);
+        assertThat(summary.averageViewers()).isEqualByComparingTo("5");
+        assertThat(summary.peakViewers()).isEqualTo(10);
+        var unknown = measurements.summarize(channel.id(), channel.userId(), from.plusSeconds(3), from.plusSeconds(5));
+        assertThat(unknown.averageViewers()).isNull();
+        assertThat(unknown.peakViewers()).isNull();
+        var foreign = measurements.summarize(channel.id(), UUID.randomUUID(), from, from.plusSeconds(5));
+        assertThat(foreign.totalSamples()).isZero();
+        assertThat(foreign.averageViewers()).isNull();
+        assertThat(measurements.summarize(channel.id(), channel.userId(), from.minusSeconds(1), from).totalSamples()).isZero();
+        assertThatThrownBy(() -> measurements.summarize(channel.id(), channel.userId(), from, from))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> measurements.summarize(channel.id(), channel.userId(), from, from.plusSeconds(32 * 86400)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test
+    void summaryApiChecksOwnershipRangeAndEmptyMetrics() throws Exception {
+        var channel = channelForRefresh("summary-api@example.com");
+        String path = "/api/channels/" + channel.id() + "/statistics";
+        String from = "2026-11-04T13:31:00.123456789Z";
+        String to = "2026-11-04T14:31:00.123456789Z";
+        mvc.perform(get(path).with(user("summary-api@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalSamples").value(0))
+                .andExpect(jsonPath("$.averageViewers").doesNotExist()).andExpect(jsonPath("$.peakViewers").doesNotExist())
+                .andExpect(jsonPath("$.from").value("2026-11-04T13:31:00.123456Z"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"));
+        users.save(new UserAccount(UUID.randomUUID(), "summary-outsider@example.com", "hash", "Foreign"));
+        mvc.perform(get(path).with(user("summary-outsider@example.com")).param("from", from).param("to", to))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(path).param("from", from).param("to", to)).andExpect(status().isUnauthorized());
+        for (String invalidTo : java.util.List.of(from, "invalid", "2026-12-10T00:00:00Z",
+                "2026-11-04T13:31:00.123456999Z")) {
+            mvc.perform(get(path).with(user("summary-api@example.com")).param("from", from).param("to", invalidTo))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path).with(user("summary-api@example.com"))).andExpect(status().isBadRequest());
+    }
+    @Test
+    void hourlyStatisticsUsesUtcBoundariesAndLeavesGapsEmpty() {
+        var channel = channelForRefresh("hourly@example.com");
+        var start = java.time.Instant.parse("2026-11-03T23:00:00Z");
+        var times = java.util.List.of(start.plusSeconds(3599), start.plusSeconds(3600), start.plusSeconds(3660),
+                start.plusSeconds(10800));
+        Long[] viewers = {null, 0L, 20L, 999L};
+        for (int index = 0; index < times.size(); index++) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    times.get(index), index == 0 ? com.streambid.platform.StreamState.UNKNOWN
+                            : com.streambid.platform.StreamState.LIVE, viewers[index]));
+        }
+        var buckets = measurements.hourly(channel.id(), channel.userId(), start, start.plusSeconds(10800));
+        assertThat(buckets).hasSize(2);
+        assertThat(buckets.getFirst().hour()).isEqualTo(start);
+        assertThat(buckets.getFirst().unknownSamples()).isEqualTo(1);
+        assertThat(buckets.getFirst().knownViewerSamples()).isZero();
+        assertThat(buckets.getFirst().averageViewers()).isNull();
+        assertThat(buckets.getFirst().peakViewers()).isNull();
+        assertThat(buckets.getLast().hour()).isEqualTo(start.plusSeconds(3600));
+        assertThat(buckets.getLast().totalSamples()).isEqualTo(2);
+        assertThat(buckets.getLast().liveSamples()).isEqualTo(2);
+        assertThat(buckets.getLast().knownViewerSamples()).isEqualTo(2);
+        assertThat(buckets.getLast().averageViewers()).isEqualByComparingTo("10");
+        assertThat(buckets.getLast().peakViewers()).isEqualTo(20);
+        assertThat(measurements.hourly(channel.id(), UUID.randomUUID(), start, start.plusSeconds(10800))).isEmpty();
+        assertThat(measurements.hourly(channel.id(), channel.userId(), start.minusSeconds(3600), start)).isEmpty();
+    }
+    @Test
+    void hourlyApiRequiresOwnerAndReturnsUtcBuckets() throws Exception {
+        var channel = channelForRefresh("hourly-api@example.com");
+        var from = java.time.Instant.parse("2026-11-04T00:00:00Z");
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                from.plusSeconds(1), com.streambid.platform.StreamState.UNKNOWN, null));
+        String path = "/api/channels/" + channel.id() + "/statistics/hourly";
+        String to = from.plusSeconds(7200).toString();
+        mvc.perform(get(path).with(user("hourly-api@example.com")).param("from", from.toString()).param("to", to))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].hour").value(from.toString()))
+                .andExpect(jsonPath("$[0].unknownSamples").value(1))
+                .andExpect(jsonPath("$[0].averageViewers").doesNotExist())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"));
+        users.save(new UserAccount(UUID.randomUUID(), "hourly-foreign@example.com", "hash", "Foreign"));
+        mvc.perform(get(path).with(user("hourly-foreign@example.com")).param("from", from.toString()).param("to", to))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(path).param("from", from.toString()).param("to", to)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).with(user("hourly-api@example.com"))).andExpect(status().isBadRequest());
+        mvc.perform(get(path).with(user("hourly-api@example.com")).param("from", to).param("to", from.toString()))
+                .andExpect(status().isBadRequest());
+    }
+    @Test
+    void retentionDeletesOnlyExpiredMeasurementsInBoundedBatches() {
+        var channel = channelForRefresh("retention@example.com");
+        var cutoff = java.time.Instant.parse("2026-11-04T14:43:00Z");
+        for (int offset : new int[] {-2, -1, 0, 1}) {
+            measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                    cutoff.plusSeconds(offset), com.streambid.platform.StreamState.UNKNOWN, null));
+        }
+        assertThat(measurements.deleteBefore(cutoff, 1)).isEqualTo(1);
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10)).hasSize(3);
+        assertThat(measurements.deleteBefore(cutoff, 1000)).isEqualTo(1);
+        assertThat(measurements.deleteBefore(cutoff, 1000)).isZero();
+        assertThat(measurements.history(channel.id(), channel.userId(), null, 10))
+                .extracting(com.streambid.statistics.ChannelMeasurement::measuredAt)
+                .containsExactly(cutoff.plusSeconds(1), cutoff);
+        assertThat(channels.find(channel.id())).isPresent();
+        assertThat(credentials.find(channel.id())).isPresent();
+        assertThatThrownBy(() -> measurements.deleteBefore(cutoff, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> measurements.deleteBefore(cutoff, 1001)).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test
+    void statisticsMetadataReportsActualAvailabilityAndDisabledRetention() throws Exception {
+        var channel = channelForRefresh("metadata@example.com");
+        String path = "/api/channels/" + channel.id() + "/statistics/metadata";
+        mvc.perform(get(path).with(user("metadata@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability.firstMeasuredAt").doesNotExist())
+                .andExpect(jsonPath("$.retentionEnabled").value(false)).andExpect(jsonPath("$.retentionDays").doesNotExist());
+        var now = java.time.Instant.parse("2026-11-04T15:37:00Z");
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(), now,
+                com.streambid.platform.StreamState.UNKNOWN, null));
+        mvc.perform(get(path).with(user("metadata@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability.firstMeasuredAt").value(now.toString()))
+                .andExpect(jsonPath("$.availability.lastMeasuredAt").value(now.toString()))
+                .andExpect(jsonPath("$.collectionEnabled").value(false)).andExpect(jsonPath("$.maxRangeDays").value(31));
+        users.save(new UserAccount(UUID.randomUUID(), "metadata-foreign@example.com", "hash", "Foreign"));
+        mvc.perform(get(path).with(user("metadata-foreign@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+    }
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean ChannelListingRepository listings;
+    @Autowired ChannelListingService listingService;
+
+    @Test
+    void channelListingIsHiddenByDefaultOwnedAndRequiresAuthorization() {
+        var channel = channelForRefresh("listing@example.com");
+        var initial = listings.readOwned(channel.id(), channel.userId()).orElseThrow();
+        assertThat(initial.listed()).isFalse();
+        assertThat(initial.updatedAt()).isNull();
+        assertThat(listings.readOwned(channel.id(), UUID.randomUUID())).isEmpty();
+        assertThat(listings.setOwned(channel.id(), UUID.randomUUID(), true)).isEmpty();
+        var listed = listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        assertThat(listed.listed()).isTrue();
+        assertThat(listed.updatedAt()).isNotNull();
+        assertThat(listings.readOwned(channel.id(), channel.userId())).contains(listed);
+        credentials.delete(channel.id());
+        assertThat(listings.setOwned(channel.id(), channel.userId(), true)).isEmpty();
+        assertThat(listings.setOwned(channel.id(), channel.userId(), false).orElseThrow().listed()).isFalse();
+        assertThat(channels.find(channel.id())).isPresent();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void listingSchemaRejectsDuplicatesOrphansAndNullVisibility() {
+        var channel = channelForRefresh("listing-constraints@example.com");
+        try {
+            database.execute("INSERT INTO channel_listings (channel_id, listed) VALUES (?, TRUE)", channel.id());
+            assertThatThrownBy(() -> database.execute(
+                    "INSERT INTO channel_listings (channel_id, listed) VALUES (?, FALSE)", channel.id()))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThatThrownBy(() -> database.execute(
+                    "INSERT INTO channel_listings (channel_id, listed) VALUES (?, TRUE)", UUID.randomUUID()))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThatThrownBy(() -> database.execute(
+                    "INSERT INTO channel_listings (channel_id, listed) VALUES (?, NULL)", channel.id()))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isTrue();
+        } finally {
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id = ?", channel.userId());
+        }
+    }
+    @Test
+    void listingApiIsOwnerOnlyAndDisconnectClearsVisibility() throws Exception {
+        var channel = channelForRefresh("listing-api@example.com");
+        users.save(new UserAccount(UUID.randomUUID(), "listing-foreign@example.com", "hash", "Foreign"));
+        String path = "/api/channels/" + channel.id() + "/listing";
+        mvc.perform(get(path).with(user("listing-api@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.listed").value(false));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-foreign@example.com")).with(csrf()).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).with(csrf()).contentType("application/json").content("{}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).with(csrf()).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.listed").value(true));
+        disconnectService.disconnect(channel.id(), "listing-api@example.com");
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("listing-api@example.com")).with(csrf()).contentType("application/json").content("{\"listed\":true}"))
+                .andExpect(status().isConflict());
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void disconnectWaitsForListingAndReconnectDoesNotRestoreVisibility() throws Exception {
+        String email = "listing-race@example.com";
+        var channel = channelForRefresh(email);
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var listingReachedWrite = new CountDownLatch(1);
+        var releaseListing = new CountDownLatch(1);
+        var disconnectStarted = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            doAnswer(call -> {
+                listingReachedWrite.countDown();
+                if (!releaseListing.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting to release listing update");
+                }
+                return call.callRealMethod();
+            }).when(listings).setOwned(channel.id(), channel.userId(), true);
+            var listing = executor.submit(() -> listingService.set(email, channel.id(), true));
+            assertThat(listingReachedWrite.await(5, TimeUnit.SECONDS)).isTrue();
+            var disconnect = executor.submit(() -> {
+                disconnectStarted.countDown();
+                disconnectService.disconnect(channel.id(), email);
+            });
+            assertThat(disconnectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> disconnect.get(200, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            releaseListing.countDown();
+            listing.get(5, TimeUnit.SECONDS);
+            disconnect.get(5, TimeUnit.SECONDS);
+            assertThat(credentials.find(channel.id())).isEmpty();
+            assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+            store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                    new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+            assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+            assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
+                    .extracting(com.streambid.campaign.CampaignCandidate::channelId).doesNotContain(channel.id());
+        } finally {
+            releaseListing.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+            reset(listings);
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id = ?", channel.userId());
+        }
+    }
+    @Autowired com.streambid.campaign.CampaignCandidateRepository candidates;
+    @Autowired com.streambid.inventory.AdPlacementRepository placements;
+    @Autowired com.streambid.inventory.AdPlacementService placementService;
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void simultaneousAvailabilityChangesKeepOneWindowAndOneVersion() throws Exception {
+        String email = "availability-race@example.com";
+        var channel = channelForRefresh(email);
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1, null));
+        var start = java.time.Instant.now().plusSeconds(86400);
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> raceAvailability(barrier, email, placement.id(), start));
+            var second = executor.submit(() -> raceAvailability(barrier, email, placement.id(), start.plusSeconds(1800)));
+            assertThat(java.util.List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+            var windows = placementService.availability(email, placement.id(), null, 20);
+            assertThat(windows).hasSize(1);
+            var next = windows.getFirst().endsAt();
+            placementService.addAvailability(email, placement.id(),
+                    new com.streambid.inventory.AvailabilityRequest(next, next.plusSeconds(3600), 1L));
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(2);
+            assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(2);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM placement_availability WHERE placement_id = ?", placement.id());
+            database.execute("DELETE FROM ad_placements WHERE id = ?", placement.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id = ?", channel.userId());
+        }
+    }
+
+    private int raceAvailability(java.util.concurrent.CyclicBarrier barrier, String email, UUID id,
+            java.time.Instant start) throws Exception {
+        barrier.await(5, TimeUnit.SECONDS);
+        try {
+            placementService.addAvailability(email, id, new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 0L));
+            return 200;
+        } catch (ResponseStatusException exception) {
+            return exception.getStatusCode().value();
+        }
+    }
+    @Test
+    void publicPlacementCatalogShowsAndFiltersAdvertisingRestrictions() throws Exception {
+        String email = "category-catalog@example.com";
+        var channel = channelForRefresh(email);
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1, new com.streambid.offer.OfferRectangle(1000, 2000, 3000, 4000)));
+        placementService.setCategories(email, placement.id(), new com.streambid.inventory.PlacementCategoryRequest(
+                false, java.util.Set.of("gaming"), 0L));
+        var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var secondStart = start.plusSeconds(86400);
+        String hours = "/api/catalog/placements/" + placement.id() + "/hours";
+        mvc.perform(get(hours).with(user(email))).andExpect(status().isNotFound());
+        placementService.addAvailability(email, placement.id(), new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 1L));
+        placementService.addAvailability(email, placement.id(), new com.streambid.inventory.AvailabilityRequest(
+                secondStart, secondStart.plusSeconds(7200), 2L));
+        placementService.setActive(email, placement.id(), new com.streambid.inventory.PlacementActivationRequest(true, 3L));
+        mvc.perform(get("/api/catalog/placements/" + placement.id()).with(user(email))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.unrestrictedCategories").value(false)).andExpect(jsonPath("$.allowedCategories[0]").value("gaming"))
+                .andExpect(jsonPath("$.zone.y").value(2000)).andExpect(jsonPath("$.zone.width").value(3000));
+        mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "gaming"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "food"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "Invalid Category"))
+                .andExpect(status().isBadRequest());
+        assertThatThrownBy(() -> placementService.setCategories(email, placement.id(),
+                new com.streambid.inventory.PlacementCategoryRequest(true, java.util.Set.of(), 4L)))
+                .isInstanceOf(ResponseStatusException.class);
+        mvc.perform(get(hours)).andExpect(status().isUnauthorized());
+        mvc.perform(get(hours).with(user(email)).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].startsAt").value(start.toString()))
+                .andExpect(jsonPath("$[0].endsAt").value(start.plusSeconds(7200).toString()))
+                .andExpect(jsonPath("$[0].id").doesNotExist());
+        mvc.perform(get(hours).with(user(email)).param("after", start.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].startsAt").value(secondStart.toString()));
+        mvc.perform(get(hours).with(user(email)).param("after", secondStart.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get(hours).with(user(email)).param("limit", "101")).andExpect(status().isBadRequest());
+        listings.setOwned(channel.id(), channel.userId(), false).orElseThrow();
+        mvc.perform(get(hours).with(user(email))).andExpect(status().isNotFound());
+    }
+    @Test
+    void categoryPolicyRequiresOwnerAndCurrentInactiveVersion() throws Exception {
+        String email = "category-policy@example.com";
+        var channel = channelForRefresh(email);
+        channelForRefresh("category-foreign@example.com");
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1, null));
+        String path = "/api/placements/" + placement.id() + "/categories";
+        mvc.perform(get(path).with(user(email))).andExpect(status().isOk()).andExpect(jsonPath("$.unrestricted").value(true));
+        String body = "{\"unrestricted\":false,\"categories\":[\"gaming\"],\"expectedVersion\":0}";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).with(user(email)).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.unrestricted").value(false)).andExpect(jsonPath("$.categories[0]").value("gaming"));
+        assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).with(user(email)).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isConflict());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).with(user(email)).with(csrf())
+                .contentType("application/json").content("{\"unrestricted\":false,\"categories\":[],\"expectedVersion\":1}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(path).with(user("category-foreign@example.com"))).andExpect(status().isNotFound());
+        assertThat(placementService.categories(email, placement.id()).categories()).containsExactly("gaming");
+    }
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void availabilityApiRejectsOverlapWithoutChangingPlacementVersion() throws Exception {
+        String email = "availability-api@example.com";
+        var channel = channelForRefresh(email);
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1, null));
+        var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        String path = "/api/placements/" + placement.id() + "/availability";
+        String body = "{\"startsAt\":\"%s\",\"endsAt\":\"%s\",\"expectedVersion\":%d}";
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(other, "availability-api-other@example.com", "hash", "Other"));
+        users.addRole(other, com.streambid.user.UserRole.STREAMER);
+        try {
+            mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                    .content(body.formatted(start, start.plusSeconds(7200), 0))).andExpect(status().isCreated());
+            mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                    .content(body.formatted(start.plusSeconds(3600), start.plusSeconds(10800), 1)))
+                    .andExpect(status().isConflict());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+            assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(1);
+            mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json")
+                    .content(body.formatted(start.plusSeconds(7200), start.plusSeconds(10800), 1)))
+                    .andExpect(status().isCreated());
+            mvc.perform(get(path).with(user(email))).andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+            mvc.perform(get(path).with(user("availability-api-other@example.com"))).andExpect(status().isNotFound());
+            mvc.perform(post(path).with(user(email)).contentType("application/json")
+                    .content(body.formatted(start, start.plusSeconds(7200), 2))).andExpect(status().isForbidden());
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            var first = placementService.availability(email, placement.id(), null, 20).getFirst();
+            String remove = path + "/" + first.id();
+            mvc.perform(delete(remove).with(user("availability-api-other@example.com")).with(csrf())
+                    .param("expectedVersion", "2")).andExpect(status().isNotFound());
+            mvc.perform(delete(remove).with(user(email)).param("expectedVersion", "2"))
+                    .andExpect(status().isForbidden());
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "0"))
+                    .andExpect(status().isConflict());
+            mvc.perform(delete(path + "/" + UUID.randomUUID()).with(user(email)).with(csrf()).param("expectedVersion", "2"))
+                    .andExpect(status().isNotFound());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(2);
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "2"))
+                    .andExpect(status().isNoContent());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(3);
+            String activation = "/api/placements/" + placement.id() + "/activation";
+            String enable = "{\"active\":true,\"expectedVersion\":3}";
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json").content(enable))
+                    .andExpect(status().isConflict());
+            listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json").content(enable))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(true))
+                    .andExpect(jsonPath("$.version").value(4));
+            var remaining = placementService.availability(email, placement.id(), null, 20).getFirst();
+            String catalog = "/api/catalog/placements/" + placement.id();
+            mvc.perform(get(catalog).with(user(email))).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.minimumPrice").value(200)).andExpect(jsonPath("$.currency").value("PLN"))
+                    .andExpect(jsonPath("$.userId").doesNotExist()).andExpect(jsonPath("$.version").doesNotExist());
+            mvc.perform(get("/api/catalog/placements").with(user(email)).param("channelId", channel.id().toString()))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+            listings.setOwned(channel.id(), channel.userId(), false).orElseThrow();
+            mvc.perform(get(catalog).with(user(email))).andExpect(status().isNotFound());
+            listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+            mvc.perform(delete(path + "/" + remaining.id()).with(user(email)).with(csrf()).param("expectedVersion", "4"))
+                    .andExpect(status().isConflict());
+            credentials.delete(channel.id());
+            mvc.perform(get(catalog).with(user(email))).andExpect(status().isNotFound());
+            mvc.perform(get("/api/catalog/placements").with(user(email)))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json")
+                    .content("{\"active\":false,\"expectedVersion\":4}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(false));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(activation)
+                    .with(user(email)).with(csrf()).contentType("application/json")
+                    .content("{\"active\":true,\"expectedVersion\":5}"))
+                    .andExpect(status().isConflict());
+            assertThat(placementService.availability(email, placement.id(), null, 20)).hasSize(1);
+            mvc.perform(delete(remove).with(user(email)).with(csrf()).param("expectedVersion", "5"))
+                    .andExpect(status().isNotFound());
+            assertThat(placementService.find(email, placement.id()).version()).isEqualTo(5);
+        } finally {
+            database.execute("DELETE FROM placement_availability WHERE placement_id = ?", placement.id());
+            database.execute("DELETE FROM ad_placements WHERE id = ?", placement.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id IN (?, ?)", channel.userId(), other);
+        }
+    }
+    @Test
+    void ownerAddsAvailabilityAndAdvancesPlacementVersion() {
+        String email = "availability-owner@example.com";
+        var channel = channelForRefresh(email);
+        var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
+                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1, null));
+        var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var request = new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 0L);
+        var saved = placementService.addAvailability(email, placement.id(), request);
+        assertThat(placementService.find(email, placement.id()).version()).isEqualTo(1);
+        assertThat(placementService.availability(email, placement.id(), null, 20)).containsExactly(saved);
+        assertThat(placementService.availability(email, placement.id(), start, 20)).isEmpty();
+        assertThatThrownBy(() -> placementService.addAvailability(email, placement.id(), request))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+    @Test
+    void streamerCreatesInactivePlacementWithServerIdentity() throws Exception {
+        var channel = channelForRefresh("inventory-create@example.com");
+        String body = """
+                {"channelId":"%s","title":"Banner","position":"Top right","widthPx":320,"heightPx":180,
+                 "durationSeconds":3600,"minimumPrice":200,"currency":"PLN","negotiable":false,"capacity":1,
+                 "zone":{"x":1000,"y":2000,"width":3000,"height":4000},"active":true,"version":999}
+                """.formatted(channel.id());
+        var result = mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.active").value(false)).andExpect(jsonPath("$.version").value(0))
+                .andExpect(jsonPath("$.zone.x").value(1000)).andReturn();
+        String path = result.getResponse().getHeader("Location");
+        mvc.perform(get(path).with(user("inventory-create@example.com"))).andExpect(status().isOk());
+        mvc.perform(get("/api/placements").with(user("inventory-create@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        String update = "{\"expectedVersion\":0,\"placement\":" + body.replace("Banner", "Updated banner").replace("\"x\":1000", "\"x\":3000") + "}";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(update))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Updated banner"))
+                .andExpect(jsonPath("$.zone.x").value(3000)).andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.active").value(false));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(update))
+                .andExpect(status().isConflict());
+        mvc.perform(post("/api/placements").with(user("inventory-create@example.com"))
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        var other = channelForRefresh("inventory-other@example.com");
+        mvc.perform(get(path).with(user("inventory-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                .with(user("inventory-other@example.com")).with(csrf()).contentType("application/json").content(update))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/api/placements").with(user("inventory-other@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isNotFound());
+        mvc.perform(post("/api/placements").with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        for (String invalid : java.util.List.of(body.replace("\"widthPx\":320", "\"widthPx\":0"),
+                body.replace("\"x\":1000", "\"x\":9000"),
+                body.replace("\"minimumPrice\":200", "\"minimumPrice\":0.001"),
+                body.replace("\"minimumPrice\":200", "\"minimumPrice\":null"),
+                body.replace("\"currency\":\"PLN\"", "\"currency\":\"pln\""),
+                body.replace("\"capacity\":1", "\"capacity\":0"))) {
+            mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
+                    .contentType("application/json").content(invalid)).andExpect(status().isBadRequest());
+        }
+        for (String invalid : java.util.List.of(update.replace("\"expectedVersion\":0", "\"expectedVersion\":null"),
+                update.replace("\"expectedVersion\":0", "\"expectedVersion\":-1"),
+                update.replace("\"expectedVersion\":0", "\"expectedVersion\":1").replace(channel.id().toString(), other.id().toString()))) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                    .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        UUID advertiser = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "inventory-advertiser@example.com", "hash", "Advertiser"));
+        users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
+        mvc.perform(post("/api/placements").with(user("inventory-advertiser@example.com").roles("STREAMER")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/placements").with(user("inventory-advertiser@example.com").roles("STREAMER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).with(user("inventory-create@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.title").value("Updated banner"));
+        mvc.perform(get("/api/placements").with(user("inventory-create@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+    }
+    @Test
+    void placementRepositoryKeepsOwnershipAndOptimisticVersion() {
+        var channel = channelForRefresh("inventory-owner@example.com");
+        var now = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var placement = new com.streambid.inventory.AdPlacement(UUID.randomUUID(), channel.id(), "Banner", "Top right",
+                320, 180, 3600, new java.math.BigDecimal("200.00"), "PLN", false, 1, null, false, 0, now, now);
+        assertThat(placements.insertOwned(placement, UUID.randomUUID())).isEmpty();
+        assertThat(placements.insertOwned(placement, channel.userId())).contains(placement);
+        assertThat(placements.findOwned(placement.id(), UUID.randomUUID())).isEmpty();
+        assertThat(placements.listOwned(channel.userId(), null, 20)).containsExactly(placement);
+        assertThat(placements.listOwned(channel.userId(), placement.id(), 20)).isEmpty();
+        var saved = placements.updateOwned(placement, channel.userId(), 0).orElseThrow();
+        assertThat(saved.version()).isEqualTo(1);
+        assertThat(saved.active()).isFalse();
+        assertThat(placements.updateOwned(placement, channel.userId(), 0)).isEmpty();
+        assertThat(placements.updateOwned(placement, UUID.randomUUID(), 1)).isEmpty();
+    }
+    @Test
+    void streamerCatalogRequiresConsentAndHidesDisconnectedChannels() throws Exception {
+        var channel = channelForRefresh("catalog-streamer@example.com");
+        mvc.perform(put("/api/users/me/settings").with(user("catalog-streamer@example.com")).with(csrf())
+                        .contentType("application/json")
+                        .content("""
+                                {"displayName":"Catalog Streamer","channelDescription":"  Variety streams  "}
+                                """))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.channelDescription").value("Variety streams"));
+        var now = java.time.Instant.now();
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                now.minusSeconds(120), com.streambid.platform.StreamState.LIVE, 24L));
+        measurements.saveIfConnected(new com.streambid.statistics.ChannelMeasurement(UUID.randomUUID(), channel.id(),
+                now.minusSeconds(60), com.streambid.platform.StreamState.OFFLINE, null));
+        String audience = "$.audience['" + channel.id() + "']";
+        String path = "/api/catalog/streamers/" + channel.id();
+        mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
+        var jpeg = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(512, 512, java.awt.image.BufferedImage.TYPE_INT_RGB),
+                "jpeg", jpeg);
+        var photo = new org.springframework.mock.web.MockMultipartFile("photo", "profile.jpg", "image/jpeg", jpeg.toByteArray());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart(org.springframework.http.HttpMethod.PUT, "/api/users/me/photo").file(photo)
+                        .with(user("catalog-streamer@example.com")).with(csrf()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(path + "/photo")).andExpect(status().isNotFound());
+        var listing = put("/api/channels/" + channel.id() + "/listing")
+                .with(user("catalog-streamer@example.com")).with(csrf()).contentType("application/json");
+        mvc.perform(listing.content("{\"listed\":true}")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.listed").value(true));
+        mvc.perform(get(path + "/photo")).andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(jpeg.toByteArray()));
+        mvc.perform(get(path)).andExpect(status().isOk());
+        mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.channelId").value(channel.id().toString()))
+                .andExpect(jsonPath("$.channelDescription").value("Variety streams"))
+                .andExpect(jsonPath("$.userId").doesNotExist()).andExpect(jsonPath("$.externalChannelId").doesNotExist());
+        mvc.perform(get("/api/catalog/streamers").with(user("catalog-viewer@example.com")).param("platform", "TWITCH"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(1))
+                .andExpect(jsonPath("$.streamers[0].channelDescription").value("Variety streams"))
+                .andExpect(jsonPath("$.hasMore").value(false))
+                .andExpect(jsonPath(audience + ".state").value("OFFLINE"))
+                .andExpect(jsonPath(audience + ".averageViewers").value(24))
+                .andExpect(jsonPath(audience + ".peakViewers").value(24))
+                .andExpect(jsonPath(audience + ".viewerSamples").value(1));
+        mvc.perform(listing.content("{\"listed\":false}")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.listed").value(false));
+        mvc.perform(get(path + "/photo")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/catalog/streamers"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0))
+                .andExpect(jsonPath(audience).doesNotExist());
+        mvc.perform(listing.content("{\"listed\":true}")).andExpect(status().isOk());
+        credentials.delete(channel.id());
+        mvc.perform(get(path).with(user("catalog-viewer@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/catalog/streamers").with(user("catalog-viewer@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.streamers.length()").value(0))
+                .andExpect(jsonPath(audience).doesNotExist());
+    }
+    @Autowired com.streambid.campaign.CampaignParticipationRepository participations;
+    @Autowired com.streambid.campaign.ParticipationEventRepository participationEvents;
+    @Autowired com.streambid.campaign.CampaignParticipationService participationService;
+    @Autowired org.springframework.transaction.PlatformTransactionManager participationTransactions;
+
+    @Test
+    void revokedAuthorizationAndArchivedCampaignBlockAcceptanceButAllowWithdrawal() throws Exception {
+        String email = "closed-campaign-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var channel = channelForRefresh("closed-campaign-streamer@example.com");
+        channelForRefresh("closed-campaign-stranger@example.com");
+        var draft = campaignDrafts.create(email, new com.streambid.campaign.CampaignDraftRequest("Campaign", "Brief"));
+        campaignTargets.replace(email, draft.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        campaignDrafts.publish(email, draft.id(), new com.streambid.campaign.CampaignPublishRequest(1L));
+        var request = participationService.create("closed-campaign-streamer@example.com", draft.id(), channel.id(),
+                com.streambid.campaign.ParticipationDirection.APPLICATION);
+        String path = "/api/participations/" + request.id() + "/decision";
+        String accept = "{\"action\":\"ACCEPT\",\"expectedVersion\":0}";
+        mvc.perform(post(path).with(user(email)).contentType("application/json").content(accept))
+                .andExpect(status().isForbidden());
+        mvc.perform(post(path).with(user("closed-campaign-stranger@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isNotFound());
+        credentials.delete(channel.id());
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json").content(accept))
+                .andExpect(status().isConflict());
+        assertThat(participationService.find(email, request.id())).isEqualTo(request);
+        assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(1);
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        campaignDrafts.archive(email, draft.id(), new com.streambid.campaign.CampaignArchiveRequest(2L));
+        mvc.perform(post(path).with(user(email)).with(csrf()).contentType("application/json").content(accept))
+                .andExpect(status().isConflict());
+        assertThat(participationService.find(email, request.id())).isEqualTo(request);
+        mvc.perform(post(path).with(user("closed-campaign-streamer@example.com")).with(csrf())
+                .contentType("application/json").content("{\"action\":\"WITHDRAW\",\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("WITHDRAWN"))
+                .andExpect(jsonPath("$.version").value(1));
+        assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(2);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void concurrentAcceptanceAndWithdrawalHaveOneWinner() throws Exception {
+        String email = "participation-race-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var channel = channelForRefresh("participation-race-streamer@example.com");
+        var draft = campaignDrafts.create(email, new com.streambid.campaign.CampaignDraftRequest("Campaign", "Brief"));
+        campaignTargets.replace(email, draft.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        campaignDrafts.publish(email, draft.id(), new com.streambid.campaign.CampaignPublishRequest(1L));
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var request = participationService.create("participation-race-streamer@example.com", draft.id(), channel.id(),
+                    com.streambid.campaign.ParticipationDirection.APPLICATION);
+            database.execute("INSERT INTO participation_events VALUES (?, 1, ?, 'ACCEPTED', CURRENT_TIMESTAMP)", request.id(), owner);
+            assertThatThrownBy(() -> participationService.decide(email, request.id(),
+                    new com.streambid.campaign.ParticipationDecisionRequest(com.streambid.campaign.ParticipationAction.ACCEPT, 0L)))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            database.execute("DELETE FROM participation_events WHERE participation_id = ? AND version = 1", request.id());
+            assertThat(participationService.find(email, request.id()).version()).isZero();
+            assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(1);
+            var locked = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var disconnect = executor.submit(() -> new org.springframework.transaction.support.TransactionTemplate(participationTransactions)
+                    .executeWithoutResult(transaction -> {
+                        channels.lockOwned(channel.id(), channel.userId()).orElseThrow();
+                        credentials.delete(channel.id());
+                        locked.countDown();
+                        try {
+                            if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Disconnect timed out");
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(exception);
+                        }
+                    }));
+            assertThat(locked.await(5, TimeUnit.SECONDS)).isTrue();
+            var acceptingDisconnected = executor.submit(() -> {
+                try {
+                    participationService.decide(email, request.id(), new com.streambid.campaign.ParticipationDecisionRequest(
+                            com.streambid.campaign.ParticipationAction.ACCEPT, 0L));
+                    return 200;
+                } catch (ResponseStatusException exception) {
+                    return exception.getStatusCode().value();
+                }
+            });
+            try {
+                assertThatThrownBy(() -> acceptingDisconnected.get(200, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .isInstanceOf(TimeoutException.class);
+            } finally {
+                release.countDown();
+            }
+            disconnect.get(5, TimeUnit.SECONDS);
+            assertThat(acceptingDisconnected.get(5, TimeUnit.SECONDS)).isEqualTo(409);
+            store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                    new TwitchUserTokens("race-access", "race-refresh", java.time.Instant.now().plusSeconds(3600)));
+            var accept = executor.submit(() -> raceParticipation(barrier, email, request.id(),
+                    com.streambid.campaign.ParticipationAction.ACCEPT));
+            var withdraw = executor.submit(() -> raceParticipation(barrier, "participation-race-streamer@example.com", request.id(),
+                    com.streambid.campaign.ParticipationAction.WITHDRAW));
+            assertThat(java.util.List.of(accept.get(10, TimeUnit.SECONDS), withdraw.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+            var saved = participationService.find(email, request.id());
+            assertThat(saved.version()).isEqualTo(1);
+            assertThat(participationEvents.findForActor(request.id(), owner, null, 20)).hasSize(2);
+            assertThat(saved.status()).isIn(com.streambid.campaign.ParticipationStatus.ACCEPTED,
+                    com.streambid.campaign.ParticipationStatus.WITHDRAWN);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.execute("DELETE FROM participation_events WHERE participation_id IN (SELECT id FROM campaign_participations WHERE campaign_id = ?)", draft.id());
+            database.execute("DELETE FROM campaign_participations WHERE campaign_id = ?", draft.id());
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", draft.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", draft.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", draft.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id IN (?, ?)", owner, channel.userId());
+        }
+    }
+
+    private int raceParticipation(java.util.concurrent.CyclicBarrier barrier, String email, UUID id,
+            com.streambid.campaign.ParticipationAction action) throws Exception {
+        barrier.await(5, TimeUnit.SECONDS);
+        try {
+            participationService.decide(email, id, new com.streambid.campaign.ParticipationDecisionRequest(action, 0L));
+            return 200;
+        } catch (ResponseStatusException exception) {
+            return exception.getStatusCode().value();
+        }
+    }
+
+    @Test
+    void campaignApplicationsAreUniqueAndVisibleOnlyToBothParties() throws Exception {
+        var channel = channelForRefresh("applicant@example.com");
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "application-advertiser@example.com", "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var draft = campaignDrafts.create("application-advertiser@example.com",
+                new com.streambid.campaign.CampaignDraftRequest("Campaign", "Brief"));
+        campaignTargets.replace("application-advertiser@example.com", draft.id(),
+                new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        campaignDrafts.publish("application-advertiser@example.com", draft.id(),
+                new com.streambid.campaign.CampaignPublishRequest(1L));
+        var now = java.time.Instant.now();
+        var request = new com.streambid.campaign.CampaignParticipation(UUID.randomUUID(), draft.id(), channel.id(),
+                channel.userId(), com.streambid.campaign.ParticipationDirection.APPLICATION,
+                com.streambid.campaign.ParticipationStatus.PENDING, 0, now, now);
+        var saved = participations.create(request).orElseThrow();
+        participationEvents.append(saved, channel.userId());
+        assertThat(participationEvents.findForActor(saved.id(), owner, null, 20)).hasSize(1);
+        assertThat(participationEvents.findForActor(saved.id(), channel.userId(), null, 20).getFirst().actorId())
+                .isEqualTo(channel.userId());
+        assertThat(participationEvents.findForActor(saved.id(), UUID.randomUUID(), null, 20)).isEmpty();
+        assertThat(participationEvents.findForActor(saved.id(), owner, 0L, 20)).isEmpty();
+        assertThatThrownBy(() -> participationEvents.findForActor(saved.id(), owner, null, 101))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(participations.create(request)).isEmpty();
+        assertThat(participations.findForActor(saved.id(), owner)).contains(saved);
+        assertThat(participations.findForActor(saved.id(), channel.userId())).contains(saved);
+        assertThat(participations.findForActor(saved.id(), UUID.randomUUID())).isEmpty();
+        assertThat(participations.listForActor(owner, null, 20)).containsExactly(saved);
+        assertThat(participations.listForActor(owner, saved.id(), 20)).isEmpty();
+        assertThat(participations.listForActor(UUID.randomUUID(), null, 20)).isEmpty();
+        String detail = "/api/participations/" + saved.id();
+        mvc.perform(get(detail).with(user("applicant@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(saved.id().toString()));
+        mvc.perform(get(detail).with(user("application-advertiser@example.com"))).andExpect(status().isOk());
+        mvc.perform(get(detail)).andExpect(status().isUnauthorized());
+        var stranger = channelForRefresh("participation-stranger@example.com");
+        mvc.perform(get(detail).with(user("participation-stranger@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/participations").with(user("participation-stranger@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("after", saved.id().toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("limit", "101"))
+                .andExpect(status().isBadRequest());
+        var applicant = channelForRefresh("http-applicant@example.com");
+        String body = "{\"channelId\":\"" + applicant.id() + "\"}";
+        String path = "/api/campaigns/" + draft.id();
+        var ownChannel = store.save(owner, new ChannelInfo("self-participation", "Own channel", null),
+                new TwitchUserTokens("self-access", "self-refresh", now.plusSeconds(3600)));
+        mvc.perform(post(path + "/applications").with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content("{\"channelId\":\"" + ownChannel.id() + "\"}"))
+                .andExpect(status().isConflict());
+        mvc.perform(post(path + "/applications").with(user("http-applicant@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.direction").value("APPLICATION")).andExpect(jsonPath("$.status").value("PENDING"));
+        mvc.perform(post(path + "/applications").with(user("http-applicant@example.com")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isConflict());
+        mvc.perform(post(path + "/invitations").with(user("http-applicant@example.com").roles("ADVERTISER")).with(csrf())
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        var invited = channelForRefresh("http-invited@example.com");
+        listings.setOwned(invited.id(), invited.userId(), true).orElseThrow();
+        mvc.perform(post(path + "/invitations").with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content("{\"channelId\":\"" + invited.id() + "\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.direction").value("INVITATION"));
+        String decision = "/api/participations/" + saved.id() + "/decision";
+        String accept = "{\"action\":\"ACCEPT\",\"expectedVersion\":0}";
+        mvc.perform(post(decision).with(user("applicant@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isForbidden());
+        mvc.perform(post(decision).with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACCEPTED")).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(post(decision).with(user("application-advertiser@example.com")).with(csrf())
+                .contentType("application/json").content(accept)).andExpect(status().isConflict());
+        String history = "/api/participations/" + saved.id() + "/events";
+        mvc.perform(get(history).with(user("applicant@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("ACCEPTED")).andExpect(jsonPath("$[1].status").value("PENDING"));
+        mvc.perform(get(history).with(user("application-advertiser@example.com")).param("beforeVersion", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].version").value(0));
+        mvc.perform(get(history).with(user("participation-stranger@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(history)).andExpect(status().isUnauthorized());
+        mvc.perform(get(history).with(user("applicant@example.com")).param("beforeVersion", "-1"))
+                .andExpect(status().isBadRequest());
+        var invitation = participations.listForActor(invited.userId(), null, 20).getFirst();
+        mvc.perform(get("/api/participations").with(user("application-advertiser@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("X-Has-More", "true"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().exists("X-Next-Cursor"));
+        mvc.perform(get("/api/participations").with(user("http-invited@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("X-Has-More", "false"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().doesNotExist("X-Next-Cursor"));
+        mvc.perform(get("/api/participations").with(user("application-advertiser@example.com"))
+                .param("campaignId", draft.id().toString()).param("direction", "INVITATION").param("status", "PENDING"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(invitation.id().toString()));
+        mvc.perform(get("/api/participations").with(user("participation-stranger@example.com"))
+                .param("campaignId", draft.id().toString()).param("status", "ACCEPTED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("status", "ACCEPTED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/participations").with(user("applicant@example.com")).param("status", "INVALID"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/participations/" + invitation.id() + "/decision")
+                .with(user("http-invited@example.com")).with(csrf()).contentType("application/json")
+                .content("{\"action\":\"REJECT\",\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"));
+    }
+
+    @Test
+    void databaseReadinessRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/health/ready")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/health/ready").with(user("readiness@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"));
+    }
+
+    @Test
+    void reconnectAfterCredentialRevocationRequiresNewListingConsent() {
+        var channel = channelForRefresh("revoked-listing@example.com");
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        credentials.delete(channel.id());
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "Reconnected", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).doesNotContain(channel.id());
+    }
+
+    @Test
+    void candidateSelectionRequiresListingCredentialsAndSelectedPlatform() {
+        var first = channelForRefresh("candidate-visible-one@example.com");
+        var second = channelForRefresh("candidate-visible-two@example.com");
+        var hidden = channelForRefresh("candidate-hidden@example.com");
+        var disconnected = channelForRefresh("candidate-disconnected@example.com");
+        var otherPlatform = channelForRefresh("candidate-youtube@example.com");
+        var kickChannel = channelForPlatform("candidate-kick@example.com", StreamingPlatform.KICK);
+        for (var channel : java.util.List.of(first, second, disconnected, otherPlatform)) {
+            listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        }
+        listings.setOwned(kickChannel.id(), kickChannel.userId(), true).orElseThrow();
+        credentials.delete(disconnected.id());
+        database.execute("UPDATE connected_channels SET platform = 'YOUTUBE' WHERE id = ?", otherPlatform.id());
+        var selected = java.util.Set.of(StreamingPlatform.TWITCH);
+        var page = candidates.find(selected, null, 1);
+        assertThat(page).hasSize(1);
+        var next = candidates.find(selected, page.getFirst().channelId(), 1);
+        assertThat(next).hasSize(1);
+        assertThat(java.util.Set.of(page.getFirst().channelId(), next.getFirst().channelId()))
+                .containsExactlyInAnyOrder(first.id(), second.id());
+        assertThat(candidates.find(selected, next.getFirst().channelId(), 1)).isEmpty();
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.YOUTUBE), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(otherPlatform.id());
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.KICK), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).containsExactly(kickChannel.id());
+        var mixedPlatforms = java.util.Set.of(StreamingPlatform.TWITCH, StreamingPlatform.YOUTUBE);
+        var expectedOrder = java.util.stream.Stream.of(first.id(), second.id(), otherPlatform.id())
+                .sorted(java.util.Comparator.comparing(UUID::toString)).toList();
+        var firstPage = candidates.find(mixedPlatforms, null, 2);
+        var secondPage = candidates.find(mixedPlatforms, firstPage.getLast().channelId(), 2);
+        assertThat(java.util.stream.Stream.concat(firstPage.stream(), secondPage.stream())
+                .map(com.streambid.campaign.CampaignCandidate::channelId).toList()).containsExactlyElementsOf(expectedOrder);
+        assertThat(candidates.find(java.util.Set.of(), null, 100)).isEmpty();
+        assertThat(candidates.find(selected, null, 100)).extracting(com.streambid.campaign.CampaignCandidate::channelId)
+                .doesNotContain(hidden.id(), disconnected.id(), otherPlatform.id());
+        assertThatThrownBy(() -> candidates.find(selected, null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> candidates.find(selected, null, 102)).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Autowired com.streambid.campaign.CampaignDraftService campaignDrafts;
+    @Autowired com.streambid.campaign.CampaignTargetingService campaignTargets;
+    @Autowired com.streambid.campaign.CampaignCandidateService candidateService;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    com.streambid.campaign.CampaignTargetingRepository targetingRepository;
+
+    @Test
+    void candidatePreviewIsAdvertiserOwnedAndExposesOnlyListedChannelSummary() throws Exception {
+        var visible = channelForRefresh("preview-visible@example.com");
+        channelForRefresh("preview-hidden@example.com");
+        UUID advertiser = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "preview-owner@example.com", "hash", "Advertiser"));
+        users.save(new UserAccount(other, "preview-other@example.com", "hash", "Other"));
+        users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
+        users.addRole(other, com.streambid.user.UserRole.ADVERTISER);
+        var campaign = campaignDrafts.create("preview-owner@example.com", new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
+        String path = "/api/campaigns/" + campaign.id() + "/candidates";
+        mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.candidates.length()").value(0))
+                .andExpect(jsonPath("$.hasMore").value(false)).andExpect(jsonPath("$.nextCursor").doesNotExist());
+        campaignTargets.replace("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
+        var result = mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.campaignVersion").value(1)).andExpect(jsonPath("$.candidates.length()").value(1))
+                .andExpect(jsonPath("$.candidates[0].channelId").value(visible.id().toString()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store")).andReturn();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("userId", "advertiserId", "externalChannelId",
+                "accessToken", "refreshToken", "old-access", "old-refresh");
+        mvc.perform(get(path).with(user("preview-other@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get(path).with(user("preview-visible@example.com"))).andExpect(status().isForbidden());
+        mvc.perform(get(path).with(user("preview-visible@example.com").roles("ADVERTISER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        for (String invalid : new String[] {"0", "101", "text"}) {
+            mvc.perform(get(path).with(user("preview-owner@example.com")).param("limit", invalid)).andExpect(status().isBadRequest());
+        }
+        mvc.perform(get(path).with(user("preview-owner@example.com")).param("after", "invalid"))
+                .andExpect(status().isBadRequest());
+        var published = campaignDrafts.publish("preview-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignPublishRequest(1L));
+        mvc.perform(get(path).with(user("preview-owner@example.com")).param("expectedVersion", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates[0].channelId").value(visible.id().toString()));
+        mvc.perform(get(path).with(user("preview-other@example.com"))).andExpect(status().isNotFound());
+        campaignDrafts.archive("preview-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignArchiveRequest(published.version()));
+        mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-owner@example.com")).param("after", visible.id().toString())
+                        .param("expectedVersion", "1"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void candidatePreviewCursorEndsAndUnlistingRemovesChannel() throws Exception {
+        var visible = channelForRefresh("preview-cursor-channel@example.com");
+        var second = channelForRefresh("preview-cursor-second@example.com");
+        UUID advertiser = UUID.randomUUID();
+        users.save(new UserAccount(advertiser, "preview-cursor-owner@example.com", "hash", "Advertiser"));
+        users.addRole(advertiser, com.streambid.user.UserRole.ADVERTISER);
+        var campaign = campaignDrafts.create("preview-cursor-owner@example.com",
+                new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
+        campaignTargets.replace("preview-cursor-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        listings.setOwned(visible.id(), visible.userId(), true).orElseThrow();
+        listings.setOwned(second.id(), second.userId(), true).orElseThrow();
+        String path = "/api/campaigns/" + campaign.id() + "/candidates";
+        var ordered = java.util.stream.Stream.of(visible.id(), second.id())
+                .sorted(java.util.Comparator.comparing(UUID::toString)).toList();
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1))
+                .andExpect(jsonPath("$.hasMore").value(true))
+                .andExpect(jsonPath("$.nextCursor").value(ordered.getFirst().toString()));
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
+                        .param("expectedVersion", "1").param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(1))
+                .andExpect(jsonPath("$.candidates[0].channelId").value(ordered.getLast().toString()))
+                .andExpect(jsonPath("$.hasMore").value(false)).andExpect(jsonPath("$.nextCursor").doesNotExist());
+        campaignTargets.replace("preview-cursor-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignTargetingRequest(java.util.Set.of(StreamingPlatform.YOUTUBE), 1L));
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString())
+                        .param("expectedVersion", "1"))
+                .andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("expectedVersion", "1"))
+                .andExpect(status().isConflict());
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("after", ordered.getFirst().toString()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")).param("expectedVersion", "-1"))
+                .andExpect(status().isBadRequest());
+        listings.setOwned(visible.id(), visible.userId(), false).orElseThrow();
+        listings.setOwned(second.id(), second.userId(), false).orElseThrow();
+        mvc.perform(get(path).with(user("preview-cursor-owner@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates.length()").value(0))
+                .andExpect(jsonPath("$.hasMore").value(false));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void candidatePreviewKeepsCampaignVersionAndTargetsInOneSnapshot() throws Exception {
+        String email = "preview-snapshot-owner@example.com";
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Advertiser"));
+        users.addRole(owner, com.streambid.user.UserRole.ADVERTISER);
+        var channel = channelForRefresh("preview-snapshot-channel@example.com");
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var campaign = campaignDrafts.create(email, new com.streambid.campaign.CampaignDraftRequest("Draft", ""));
+        campaignTargets.replace(email, campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                java.util.Set.of(StreamingPlatform.TWITCH), 0L));
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var executor = Executors.newSingleThreadExecutor();
+        doAnswer(call -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting to release candidate preview");
+            }
+            return call.callRealMethod();
+        }).when(targetingRepository).readOwned(campaign.id(), owner);
+        try {
+            var reading = executor.submit(() -> candidateService.preview(email, campaign.id(), null, null, 20));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            var changed = campaignTargets.replace(email, campaign.id(), new com.streambid.campaign.CampaignTargetingRequest(
+                    java.util.Set.of(StreamingPlatform.YOUTUBE), 1L));
+            assertThat(changed.version()).isEqualTo(2);
+            release.countDown();
+            var snapshot = reading.get(5, TimeUnit.SECONDS);
+            assertThat(snapshot.campaignVersion()).isEqualTo(1);
+            assertThat(snapshot.candidates()).extracting(com.streambid.campaign.CampaignCandidate::channelId)
+                    .containsExactly(channel.id());
+            var current = candidateService.preview(email, campaign.id(), null, null, 20);
+            assertThat(current.campaignVersion()).isEqualTo(2);
+            assertThat(current.candidates()).isEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            reset(targetingRepository);
+            database.execute("DELETE FROM campaign_target_platforms WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaign_events WHERE campaign_id = ?", campaign.id());
+            database.execute("DELETE FROM campaigns WHERE id = ?", campaign.id());
+            database.execute("DELETE FROM channel_listings WHERE channel_id = ?", channel.id());
+            credentials.delete(channel.id());
+            database.execute("DELETE FROM connected_channels WHERE id = ?", channel.id());
+            database.execute("DELETE FROM users WHERE id IN (?, ?)", owner, channel.userId());
+        }
+    }
+    private ConnectedChannel channelForRefresh(String email) {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Refresh"));
+        return store.save(owner, new ChannelInfo(email, "Refresh", null),
+                new TwitchUserTokens("old-access", "old-refresh", java.time.Instant.now().plusSeconds(3600)));
+    }
+
+    private ConnectedChannel channelForPlatform(String email, StreamingPlatform platform) {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, email, "hash", "Candidate"));
+        var now = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+        var channel = new ConnectedChannel(UUID.randomUUID(), owner, platform, "candidate-id", "Candidate", now);
+        channels.saveVerified(channel);
+        var cipher = new TokenCipher(Base64.getEncoder().encodeToString(new byte[32]));
+        credentials.save(new ChannelCredentials(channel.id(), cipher.encrypt("access", channel.id() + ":access"),
+                cipher.encrypt("refresh", channel.id() + ":refresh"), now.plusHours(1), now));
+        return channel;
+    }
+
+    @Test
+    void disconnectIsOwnerOnlyCsrfProtectedAndIdempotent() throws Exception {
+        var channel = channelForRefresh("disconnect@example.com");
+        users.save(new UserAccount(UUID.randomUUID(), "foreign@example.com", "hash", "Foreign"));
+        String path = "/api/channels/" + channel.id();
+        mvc.perform(delete(path).with(user("foreign@example.com")).with(csrf()))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete(path).with(user("disconnect@example.com"))).andExpect(status().isForbidden());
+        mvc.perform(delete(path).with(csrf())).andExpect(status().isUnauthorized());
+        assertThat(credentials.find(channel.id())).isPresent();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(delete(path).with(user("disconnect@example.com")).with(csrf()))
+                    .andExpect(status().isNoContent());
+        }
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThat(channels.find(channel.id())).isPresent();
+        assertThat(credentials.dueForValidation(OffsetDateTime.now(ZoneOffset.UTC).plusHours(1), null, 50)).isEmpty();
+        mvc.perform(get("/api/channels").with(user("disconnect@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].authorizationRequired").value(true));
+    }
+    @Test
+    void ownChannelSummaryReportsRequiredAuthorizationWithoutCredentials() throws Exception {
+        var channel = channelForRefresh("summary@example.com");
+        var connected = mvc.perform(get("/api/channels").with(user("summary@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].authorizationRequired").value(false))
+                .andExpect(jsonPath("$[0].lastValidatedAt").isNotEmpty()).andReturn();
+        assertThat(connected.getResponse().getContentAsString())
+                .doesNotContain("old-access", "old-refresh", "accessTokenCiphertext", "refreshTokenCiphertext");
+        credentials.delete(channel.id());
+        mvc.perform(get("/api/channels").with(user("summary@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(channel.id().toString()))
+                .andExpect(jsonPath("$[0].authorizationRequired").value(true))
+                .andExpect(jsonPath("$[0].lastValidatedAt").doesNotExist());
+    }
+    @Test
+    void validationSelectionHonorsCutoffAndKeysetCursor() {
+        var channel = channelForRefresh("due@example.com");
+        var saved = credentials.find(channel.id()).orElseThrow();
+        assertThat(credentials.dueForValidation(saved.lastValidatedAt().plusSeconds(1), null, 50))
+                .containsExactly(channel.id());
+        assertThat(credentials.dueForValidation(saved.lastValidatedAt().minusSeconds(1), null, 50)).isEmpty();
+        assertThat(credentials.dueForValidation(saved.lastValidatedAt().plusSeconds(1), channel.id(), 50)).isEmpty();
+    }
+    @Test
+    void staleValidationCannotOverwriteReconnectedCredentials() {
+        var channel = channelForRefresh("validation@example.com");
+        listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
+        var old = credentials.find(channel.id()).orElseThrow();
+        store.save(channel.userId(), new ChannelInfo(channel.externalChannelId(), "New name", null),
+                new TwitchUserTokens("new-access", "new-refresh", java.time.Instant.now().plusSeconds(3600)));
+        var current = credentials.find(channel.id()).orElseThrow();
+        assertThat(credentials.markValidated(old, old.lastValidatedAt().plusHours(1), old.expiresAt())).isFalse();
+        credentials.deleteIfUnchanged(old);
+        assertThat(credentials.find(channel.id())).contains(current);
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isTrue();
+        assertThat(candidates.find(java.util.Set.of(StreamingPlatform.TWITCH), null, 100))
+                .extracting(com.streambid.campaign.CampaignCandidate::channelId).contains(channel.id());
+        credentials.deleteIfUnchanged(current);
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThat(listings.readOwned(channel.id(), channel.userId()).orElseThrow().listed()).isFalse();
+    }
+    @Test
+    void temporaryRefreshFailurePreservesStoredCredentials() {
+        var channel = channelForRefresh("temporary@example.com");
+        var before = credentials.find(channel.id()).orElseThrow();
+        when(exchange.refresh("old-refresh")).thenThrow(new PlatformUnavailableException(
+                StreamingPlatform.TWITCH, new IllegalStateException("Temporary failure")));
+        assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "old-access"))
+                .isInstanceOf(PlatformUnavailableException.class);
+        assertThat(credentials.find(channel.id())).contains(before);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void concurrentRejectedRequestsPerformOnlyOneRefresh() throws Exception {
+        var channel = channelForRefresh("concurrent@example.com");
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var secondStarted = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        var rotated = new TwitchUserTokens("concurrent-access", "concurrent-refresh",
+                java.time.Instant.now().plusSeconds(3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(exchange.refresh("old-refresh")).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() > 1) {
+                throw new AssertionError("Concurrent refresh was not serialized");
+            }
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Refresh test timed out");
+            }
+            return rotated;
+        });
+        try {
+            var first = executor.submit(() -> refreshService.refreshRejected(channel.id(), "old-access"));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            var second = executor.submit(() -> {
+                secondStarted.countDown();
+                return refreshService.refreshRejected(channel.id(), "old-access");
+            });
+            assertThat(secondStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> second.get(250, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            release.countDown();
+            assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(rotated);
+            assertThat(second.get(5, TimeUnit.SECONDS)).isEqualTo(rotated);
+            verify(exchange, times(1)).refresh("old-refresh");
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(channel.userId())).execute();
+        }
+    }
+    @Test
+    void storesRotationOnceAndIgnoresStaleRejectedToken() {
+        var channel = channelForRefresh("rotation@example.com");
+        var rotated = new TwitchUserTokens("new-access", "new-refresh",
+                java.time.Instant.now().plusSeconds(3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        when(exchange.refresh("old-refresh")).thenReturn(rotated);
+        assertThat(refreshService.refreshRejected(channel.id(), "old-access")).isEqualTo(rotated);
+        assertThat(refreshService.refreshRejected(channel.id(), "old-access")).isEqualTo(rotated);
+        verify(exchange, times(1)).refresh("old-refresh");
+        var cipher = new TokenCipher(Base64.getEncoder().encodeToString(new byte[32]));
+        var saved = credentials.find(channel.id()).orElseThrow();
+        assertThat(cipher.decrypt(saved.refreshTokenCiphertext(), channel.id() + ":refresh")).isEqualTo("new-refresh");
+    }
+
+    @Test
+    void revokedRefreshRemovesCredentialsAndStopsFurtherAttempts() {
+        var channel = channelForRefresh("revoked@example.com");
+        when(exchange.refresh("old-refresh")).thenThrow(new TwitchReauthorizationRequiredException());
+        assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "old-access"))
+                .isInstanceOf(TwitchReauthorizationRequiredException.class);
+        assertThat(credentials.find(channel.id())).isEmpty();
+        assertThatThrownBy(() -> refreshService.refreshRejected(channel.id(), "old-access"))
+                .isInstanceOf(TwitchReauthorizationRequiredException.class);
+        verify(exchange, times(1)).refresh("old-refresh");
+    }
+    @Test
+    void reconnectKeepsChannelIdAndDoesNotTransferOwnership() {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "connect@example.com", "hash", "Connect"));
+        users.save(new UserAccount(other, "blocked@example.com", "hash", "Blocked"));
+        var identity = new ChannelInfo("verified", "Streamer", null);
+        var tokens = new TwitchUserTokens("access", "refresh", java.time.Instant.now().plusSeconds(3600));
+        var first = store.save(owner, identity, tokens);
+        var second = store.save(owner, identity, tokens);
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(channels.findByUser(owner)).hasSize(1);
+        assertThat(users.findRoles(owner)).contains("STREAMER");
+        assertThatThrownBy(() -> store.save(other, identity, tokens)).isInstanceOf(ResponseStatusException.class);
+        assertThat(channels.findByUser(other)).isEmpty();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void encryptionFailureRollsBackNewChannel() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "rollback@example.com", "hash", "Rollback"));
+        try {
+            var tokens = new TwitchUserTokens("access", "", java.time.Instant.now().plusSeconds(3600));
+            assertThatThrownBy(() -> store.save(owner, new ChannelInfo("rollback-channel", "Rollback", null), tokens))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(channels.findByUser(owner)).isEmpty();
+            assertThat(users.findRoles(owner)).isEmpty();
+        } finally {
+            database.deleteFrom(DSL.table(DSL.name("users")))
+                    .where(DSL.field(DSL.name("id"), UUID.class).eq(owner)).execute();
+        }
+    }
+    @Test
+    void storesOnlyEncryptedCredentialsBoundToChannel() {
+        UUID owner = UUID.randomUUID();
+        users.save(new UserAccount(owner, "encrypted@example.com", "hash", "Encrypted"));
+        var now = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+        var channel = new ConnectedChannel(UUID.randomUUID(), owner, StreamingPlatform.TWITCH,
+                "encrypted-channel", "Encrypted", now);
+        channels.saveVerified(channel);
+        var cipher = new TokenCipher(Base64.getEncoder().encodeToString(new byte[32]));
+        String access = cipher.encrypt("private-access", channel.id() + ":access");
+        String refresh = cipher.encrypt("private-refresh", channel.id() + ":refresh");
+        var saved = new ChannelCredentials(channel.id(), access, refresh, now.plusHours(1), now);
+        credentials.save(saved);
+        var loaded = credentials.find(channel.id()).orElseThrow();
+        assertThat(loaded).isEqualTo(saved);
+        assertThat(loaded.accessTokenCiphertext()).doesNotContain("private-access");
+        assertThat(loaded.refreshTokenCiphertext()).doesNotContain("private-refresh");
+        assertThat(cipher.decrypt(loaded.accessTokenCiphertext(), channel.id() + ":access")).isEqualTo("private-access");
+        assertThat(loaded.toString()).isEqualTo("ChannelCredentials[redacted]");
+    }
+    @Test
+    void channelApiUsesAuthenticatedOwnerInsteadOfQueryParameter() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "mine@example.com", "hash", "Mine"));
+        users.save(new UserAccount(other, "theirs@example.com", "hash", "Theirs"));
+        var time = OffsetDateTime.now(ZoneOffset.UTC).withNano(0);
+        channels.saveVerified(new ConnectedChannel(UUID.randomUUID(), owner, StreamingPlatform.TWITCH,
+                "mine", "My channel", time));
+        channels.saveVerified(new ConnectedChannel(UUID.randomUUID(), other, StreamingPlatform.TWITCH,
+                "theirs", "Other channel", time));
+        mvc.perform(get("/api/channels").param("userId", other.toString()).with(user("mine@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].externalChannelId").value("mine"));
+        mvc.perform(get("/api/channels").with(user("theirs@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].externalChannelId").value("theirs"));
+    }
+
+    @Test
+    void channelApiRejectsAnonymousRequests() throws Exception {
+        mvc.perform(get("/api/channels")).andExpect(status().isUnauthorized());
+    }
+    @Test
+    void readsOnlyOwnersChannelsAndRejectsDuplicateOwnership() {
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        users.save(new UserAccount(owner, "owner@example.com", "hash", "Owner"));
+        users.save(new UserAccount(other, "other@example.com", "hash", "Other"));
+        var channel = new ConnectedChannel(UUID.randomUUID(), owner, StreamingPlatform.TWITCH,
+                "opaque-id", "Streamer", OffsetDateTime.now(ZoneOffset.UTC).withNano(0));
+        channels.saveVerified(channel);
+        assertThat(channels.findByUser(owner)).containsExactly(channel);
+        assertThat(channels.findByUser(other)).isEmpty();
+        var duplicate = new ConnectedChannel(UUID.randomUUID(), other, StreamingPlatform.TWITCH,
+                "opaque-id", "Streamer", channel.verifiedAt());
+        assertThatThrownBy(() -> channels.saveVerified(duplicate)).isInstanceOf(DuplicateKeyException.class);
+    }
+}
