@@ -119,7 +119,7 @@ function CampaignForm({ campaign, onSaved, onCancel }: {
 }
 
 function CampaignCard({ campaign, onSaved }: { campaign: Campaign; onSaved: (campaign: Campaign) => void }) {
-  const [panel, setPanel] = useState<'edit' | 'platforms' | 'archive' | 'applications' | 'invite' | null>(null)
+  const [panel, setPanel] = useState<'edit' | 'platforms' | 'archive' | 'applications' | 'invitations' | 'invite' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const path = endpoint + '/' + campaign.id
@@ -151,10 +151,13 @@ function CampaignCard({ campaign, onSaved }: { campaign: Campaign; onSaved: (cam
     </div>}
     {!panel && campaign.status !== 'DRAFT' && <button type="button" className={secondary}
       onClick={() => setPanel('applications')}>View applications</button>}
+    {!panel && campaign.status !== 'DRAFT' && <button type="button" className={secondary}
+      onClick={() => setPanel('invitations')}>Sent invitations</button>}
     {!panel && campaign.status === 'PUBLISHED' && <button type="button" className={secondary}
       onClick={() => setPanel('invite')}>Invite streamers</button>}
     {panel === 'invite' && <CampaignInvite id={campaign.id} version={campaign.version} close={() => setPanel(null)} />}
-    {panel === 'applications' && <CampaignInbox campaignId={campaign.id} published={campaign.status === 'PUBLISHED'}
+    {(panel === 'applications' || panel === 'invitations') && <CampaignInbox key={panel} campaignId={campaign.id}
+      direction={panel === 'applications' ? 'APPLICATION' : 'INVITATION'} published={campaign.status === 'PUBLISHED'}
       onClose={() => setPanel(null)} />}
     {panel === 'edit' && <CampaignForm campaign={campaign} onCancel={() => setPanel(null)}
       onSaved={saved => { onSaved(saved); setPanel(null) }} />}
