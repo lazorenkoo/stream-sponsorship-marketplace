@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 export type Streamer = { channelId: string; displayName: string; platform: string; channelDescription: string | null }
-type Campaign = { id: string; title: string; description: string; platforms: string[] }
+export type PublishedCampaign = { id: string; title: string; description: string; platforms: string[] }
 type Audience = {
   measuredAt: string
   state: 'LIVE' | 'OFFLINE' | 'UNKNOWN'
@@ -11,9 +11,9 @@ type Audience = {
   viewerSamples: number
 }
 type Page = { streamers: Streamer[]; nextCursor: string | null; audience: Record<string, Audience> }
-  | { campaigns: Campaign[]; nextBefore: string | null; nextBeforeId: string | null }
-type Entry = Streamer | Campaign
-const platforms: Record<string, string> = { TWITCH: 'Twitch', YOUTUBE: 'YouTube', KICK: 'Kick' }
+  | { campaigns: PublishedCampaign[]; nextBefore: string | null; nextBeforeId: string | null }
+type Entry = Streamer | PublishedCampaign
+export const platforms: Record<string, string> = { TWITCH: 'Twitch', YOUTUBE: 'YouTube', KICK: 'Kick' }
 
 export function StreamerPhoto({ channel }: { channel: Streamer }) {
   const [missing, setMissing] = useState(false)
@@ -106,8 +106,9 @@ export function StreamerCatalog({ campaigns = false }: { campaigns?: boolean }) 
       <div className={campaigns ? 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3' : 'grid max-w-md justify-items-start gap-3'}>
         {channels.map(channel => 'id' in channel ? <article key={channel.id} className="min-w-0 rounded-2xl border border-sky-100 bg-white p-4">
           <h2 className="break-words font-semibold">{channel.title}</h2>
-          <p className="mt-1 text-sm text-slate-600">{channel.platforms.join(' · ')}</p>
+          <p className="mt-1 text-sm text-slate-600">{channel.platforms.map(platform => platforms[platform] ?? platform).join(' · ')}</p>
           <p className="mt-2 whitespace-pre-line break-words text-sm text-slate-700">{channel.description}</p>
+          <a href={'/campaigns/' + channel.id} className="mt-3 inline-block text-sm font-medium text-sky-800 hover:underline">View campaign</a>
         </article> : <article key={channel.channelId} className="min-w-0 max-w-full rounded-xl border border-slate-200 bg-white hover:border-sky-300">
           <a href={'/streamers/' + channel.channelId}
             className="grid h-full min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-3 rounded-xl p-3 focus-visible:outline-2 focus-visible:outline-sky-700 sm:grid-cols-[auto_minmax(0,max-content)_7.5rem] sm:gap-2">

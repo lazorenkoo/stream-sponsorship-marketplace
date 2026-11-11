@@ -1,4 +1,6 @@
+import { CampaignInvite } from './CampaignInvite'
 import { useEffect, useState, type FormEvent } from 'react'
+import { CampaignInbox } from './CampaignInbox'
 import { postJson } from './offerApi'
 
 type Campaign = {
@@ -117,7 +119,7 @@ function CampaignForm({ campaign, onSaved, onCancel }: {
 }
 
 function CampaignCard({ campaign, onSaved }: { campaign: Campaign; onSaved: (campaign: Campaign) => void }) {
-  const [panel, setPanel] = useState<'edit' | 'platforms' | 'archive' | null>(null)
+  const [panel, setPanel] = useState<'edit' | 'platforms' | 'archive' | 'applications' | 'invite' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const path = endpoint + '/' + campaign.id
@@ -144,8 +146,16 @@ function CampaignCard({ campaign, onSaved }: { campaign: Campaign; onSaved: (cam
         <button type="button" className={secondary} onClick={() => setPanel('edit')}>Edit draft</button>
         <button type="button" className={primary} onClick={() => setPanel('platforms')}>Set platforms and publish</button>
       </>}
+      {campaign.status === 'PUBLISHED' && <a className={secondary} href={'/campaigns/' + campaign.id}>View campaign</a>}
       <button type="button" className={secondary} onClick={() => setPanel('archive')}>Archive</button>
     </div>}
+    {!panel && campaign.status !== 'DRAFT' && <button type="button" className={secondary}
+      onClick={() => setPanel('applications')}>View applications</button>}
+    {!panel && campaign.status === 'PUBLISHED' && <button type="button" className={secondary}
+      onClick={() => setPanel('invite')}>Invite streamers</button>}
+    {panel === 'invite' && <CampaignInvite id={campaign.id} version={campaign.version} close={() => setPanel(null)} />}
+    {panel === 'applications' && <CampaignInbox campaignId={campaign.id} published={campaign.status === 'PUBLISHED'}
+      onClose={() => setPanel(null)} />}
     {panel === 'edit' && <CampaignForm campaign={campaign} onCancel={() => setPanel(null)}
       onSaved={saved => { onSaved(saved); setPanel(null) }} />}
     {panel === 'platforms' && <CampaignPlatforms campaign={campaign} onSaved={onSaved}

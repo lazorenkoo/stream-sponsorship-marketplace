@@ -1245,7 +1245,13 @@ class ChannelRepositoryTest {
         }
         mvc.perform(get(path).with(user("preview-owner@example.com")).param("after", "invalid"))
                 .andExpect(status().isBadRequest());
-        campaignDrafts.archive("preview-owner@example.com", campaign.id(), new com.streambid.campaign.CampaignArchiveRequest(1L));
+        var published = campaignDrafts.publish("preview-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignPublishRequest(1L));
+        mvc.perform(get(path).with(user("preview-owner@example.com")).param("expectedVersion", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.candidates[0].channelId").value(visible.id().toString()));
+        mvc.perform(get(path).with(user("preview-other@example.com"))).andExpect(status().isNotFound());
+        campaignDrafts.archive("preview-owner@example.com", campaign.id(),
+                new com.streambid.campaign.CampaignArchiveRequest(published.version()));
         mvc.perform(get(path).with(user("preview-owner@example.com"))).andExpect(status().isConflict());
         mvc.perform(get(path).with(user("preview-owner@example.com")).param("after", visible.id().toString())
                         .param("expectedVersion", "1"))

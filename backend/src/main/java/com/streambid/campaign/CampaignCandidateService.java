@@ -24,8 +24,8 @@ public class CampaignCandidateService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public CampaignCandidatePreview preview(String email, UUID id, UUID after, Long expectedVersion, int limit) {
         var campaign = drafts.findOwned(email, id);
-        if (campaign.status() != CampaignStatus.DRAFT) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Candidate preview requires a draft campaign");
+        if (campaign.status() == CampaignStatus.ARCHIVED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Archived campaigns cannot browse candidates");
         }
         if (limit < 1 || limit > 100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Candidate limit must be between 1 and 100");
