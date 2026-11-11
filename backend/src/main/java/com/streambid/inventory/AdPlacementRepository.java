@@ -1,5 +1,6 @@
 package com.streambid.inventory;
 
+import com.streambid.offer.OfferRectangle;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -18,14 +19,16 @@ public class AdPlacementRepository {
     }
 
     public Optional<AdPlacement> insertOwned(AdPlacement placement, UUID owner) {
+        var zone = placement.zone();
         return database.fetchOptional("""
                 INSERT INTO ad_placements (id, channel_id, title, position, width_px, height_px, duration_seconds,
-                    minimum_price, currency, negotiable, capacity, active, version, created_at, updated_at)
-                SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 0, CAST(? AS timestamptz), CAST(? AS timestamptz)
+                    minimum_price, currency, negotiable, capacity, zone_x, zone_y, zone_width, zone_height, active, version, created_at, updated_at)
+                SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 0, CAST(? AS timestamptz), CAST(? AS timestamptz)
                 FROM connected_channels c WHERE c.id = ? AND c.user_id = ? RETURNING *
                 """, placement.id(), placement.title(), placement.position(), placement.widthPx(), placement.heightPx(),
                 placement.durationSeconds(), placement.minimumPrice(), placement.currency(), placement.negotiable(), placement.capacity(),
-                time(placement.createdAt()), time(placement.createdAt()), placement.channelId(), owner).map(this::map);
+                zone == null ? null : zone.x(), zone == null ? null : zone.y(),
+                zone == null ? null : zone.width(), zone == null ? null : zone.height(), time(placement.createdAt()), time(placement.createdAt()), placement.channelId(), owner).map(this::map);
     }
 
     public Optional<AdPlacement> findOwned(UUID id, UUID owner) {
@@ -62,15 +65,17 @@ public class AdPlacementRepository {
     }
 
     public Optional<AdPlacement> updateOwned(AdPlacement placement, UUID owner, long expectedVersion) {
+        var zone = placement.zone();
         return database.fetchOptional("""
                 UPDATE ad_placements p SET title = ?, position = ?, width_px = ?, height_px = ?, duration_seconds = ?,
-                    minimum_price = ?, currency = ?, negotiable = ?, capacity = ?,
+                    minimum_price = ?, currency = ?, negotiable = ?, capacity = ?, zone_x = ?, zone_y = ?, zone_width = ?, zone_height = ?,
                     updated_at = GREATEST(p.updated_at, CAST(? AS timestamptz)), version = p.version + 1
                 FROM connected_channels c WHERE p.channel_id = c.id AND c.user_id = ? AND p.id = ? AND p.version = ? AND NOT p.active
                 RETURNING p.*
                 """, placement.title(), placement.position(), placement.widthPx(), placement.heightPx(), placement.durationSeconds(),
                 placement.minimumPrice(), placement.currency(), placement.negotiable(), placement.capacity(),
-                time(placement.updatedAt()), owner, placement.id(), expectedVersion).map(this::map);
+                zone == null ? null : zone.x(), zone == null ? null : zone.y(),
+                zone == null ? null : zone.width(), zone == null ? null : zone.height(), time(placement.updatedAt()), owner, placement.id(), expectedVersion).map(this::map);
     }
 
     private OffsetDateTime time(java.time.Instant value) {
@@ -90,12 +95,18 @@ public class AdPlacementRepository {
                 """, active, time(now), owner, id, expectedVersion, active, time(now)).map(this::map);
     }
 
+    static OfferRectangle mapZone(Record row) {
+        Integer x = row.get("zone_x", Integer.class);
+        return x == null ? null : new OfferRectangle(x, row.get("zone_y", Integer.class),
+                row.get("zone_width", Integer.class), row.get("zone_height", Integer.class));
+    }
+
     private AdPlacement map(Record row) {
         return new AdPlacement(row.get("id", UUID.class), row.get("channel_id", UUID.class), row.get("title", String.class),
                 row.get("position", String.class), row.get("width_px", Integer.class), row.get("height_px", Integer.class),
                 row.get("duration_seconds", Integer.class), row.get("minimum_price", java.math.BigDecimal.class),
                 row.get("currency", String.class), row.get("negotiable", Boolean.class), row.get("capacity", Integer.class),
-                row.get("active", Boolean.class), row.get("version", Long.class),
+                mapZone(row), row.get("active", Boolean.class), row.get("version", Long.class),
                 row.get("created_at", OffsetDateTime.class).toInstant(), row.get("updated_at", OffsetDateTime.class).toInstant());
     }
 }

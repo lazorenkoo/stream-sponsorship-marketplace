@@ -39,6 +39,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -546,7 +547,7 @@ class ChannelRepositoryTest {
         String email = "availability-race@example.com";
         var channel = channelForRefresh(email);
         var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
-                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1));
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1, null));
         var start = java.time.Instant.now().plusSeconds(86400);
         var barrier = new java.util.concurrent.CyclicBarrier(2);
         var executor = Executors.newFixedThreadPool(2);
@@ -590,14 +591,20 @@ class ChannelRepositoryTest {
         var channel = channelForRefresh(email);
         listings.setOwned(channel.id(), channel.userId(), true).orElseThrow();
         var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
-                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1));
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1, new com.streambid.offer.OfferRectangle(1000, 2000, 3000, 4000)));
         placementService.setCategories(email, placement.id(), new com.streambid.inventory.PlacementCategoryRequest(
                 false, java.util.Set.of("gaming"), 0L));
-        var start = java.time.Instant.now().plusSeconds(86400);
+        var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var secondStart = start.plusSeconds(86400);
+        String hours = "/api/catalog/placements/" + placement.id() + "/hours";
+        mvc.perform(get(hours).with(user(email))).andExpect(status().isNotFound());
         placementService.addAvailability(email, placement.id(), new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 1L));
-        placementService.setActive(email, placement.id(), new com.streambid.inventory.PlacementActivationRequest(true, 2L));
+        placementService.addAvailability(email, placement.id(), new com.streambid.inventory.AvailabilityRequest(
+                secondStart, secondStart.plusSeconds(7200), 2L));
+        placementService.setActive(email, placement.id(), new com.streambid.inventory.PlacementActivationRequest(true, 3L));
         mvc.perform(get("/api/catalog/placements/" + placement.id()).with(user(email))).andExpect(status().isOk())
-                .andExpect(jsonPath("$.unrestrictedCategories").value(false)).andExpect(jsonPath("$.allowedCategories[0]").value("gaming"));
+                .andExpect(jsonPath("$.unrestrictedCategories").value(false)).andExpect(jsonPath("$.allowedCategories[0]").value("gaming"))
+                .andExpect(jsonPath("$.zone.y").value(2000)).andExpect(jsonPath("$.zone.width").value(3000));
         mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "gaming"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
         mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "food"))
@@ -605,8 +612,22 @@ class ChannelRepositoryTest {
         mvc.perform(get("/api/catalog/placements").with(user(email)).param("category", "Invalid Category"))
                 .andExpect(status().isBadRequest());
         assertThatThrownBy(() -> placementService.setCategories(email, placement.id(),
-                new com.streambid.inventory.PlacementCategoryRequest(true, java.util.Set.of(), 3L)))
+                new com.streambid.inventory.PlacementCategoryRequest(true, java.util.Set.of(), 4L)))
                 .isInstanceOf(ResponseStatusException.class);
+        mvc.perform(get(hours)).andExpect(status().isUnauthorized());
+        mvc.perform(get(hours).with(user(email)).param("limit", "1"))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].startsAt").value(start.toString()))
+                .andExpect(jsonPath("$[0].endsAt").value(start.plusSeconds(7200).toString()))
+                .andExpect(jsonPath("$[0].id").doesNotExist());
+        mvc.perform(get(hours).with(user(email)).param("after", start.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].startsAt").value(secondStart.toString()));
+        mvc.perform(get(hours).with(user(email)).param("after", secondStart.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get(hours).with(user(email)).param("limit", "101")).andExpect(status().isBadRequest());
+        listings.setOwned(channel.id(), channel.userId(), false).orElseThrow();
+        mvc.perform(get(hours).with(user(email))).andExpect(status().isNotFound());
     }
     @Test
     void categoryPolicyRequiresOwnerAndCurrentInactiveVersion() throws Exception {
@@ -614,7 +635,7 @@ class ChannelRepositoryTest {
         var channel = channelForRefresh(email);
         channelForRefresh("category-foreign@example.com");
         var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
-                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1));
+                "Banner", "Top right", 320, 180, 3600, null, "PLN", true, 1, null));
         String path = "/api/placements/" + placement.id() + "/categories";
         mvc.perform(get(path).with(user(email))).andExpect(status().isOk()).andExpect(jsonPath("$.unrestricted").value(true));
         String body = "{\"unrestricted\":false,\"categories\":[\"gaming\"],\"expectedVersion\":0}";
@@ -636,7 +657,7 @@ class ChannelRepositoryTest {
         String email = "availability-api@example.com";
         var channel = channelForRefresh(email);
         var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
-                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1));
+                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1, null));
         var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         String path = "/api/placements/" + placement.id() + "/availability";
         String body = "{\"startsAt\":\"%s\",\"endsAt\":\"%s\",\"expectedVersion\":%d}";
@@ -725,7 +746,7 @@ class ChannelRepositoryTest {
         String email = "availability-owner@example.com";
         var channel = channelForRefresh(email);
         var placement = placementService.create(email, new com.streambid.inventory.AdPlacementRequest(channel.id(),
-                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1));
+                "Banner", "Top right", 320, 180, 3600, new java.math.BigDecimal("200"), "PLN", false, 1, null));
         var start = java.time.Instant.now().plusSeconds(86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         var request = new com.streambid.inventory.AvailabilityRequest(start, start.plusSeconds(7200), 0L);
         var saved = placementService.addAvailability(email, placement.id(), request);
@@ -741,20 +762,21 @@ class ChannelRepositoryTest {
         String body = """
                 {"channelId":"%s","title":"Banner","position":"Top right","widthPx":320,"heightPx":180,
                  "durationSeconds":3600,"minimumPrice":200,"currency":"PLN","negotiable":false,"capacity":1,
-                 "active":true,"version":999}
+                 "zone":{"x":1000,"y":2000,"width":3000,"height":4000},"active":true,"version":999}
                 """.formatted(channel.id());
         var result = mvc.perform(post("/api/placements").with(user("inventory-create@example.com")).with(csrf())
                 .contentType("application/json").content(body)).andExpect(status().isCreated())
-                .andExpect(jsonPath("$.active").value(false)).andExpect(jsonPath("$.version").value(0)).andReturn();
+                .andExpect(jsonPath("$.active").value(false)).andExpect(jsonPath("$.version").value(0))
+                .andExpect(jsonPath("$.zone.x").value(1000)).andReturn();
         String path = result.getResponse().getHeader("Location");
         mvc.perform(get(path).with(user("inventory-create@example.com"))).andExpect(status().isOk());
         mvc.perform(get("/api/placements").with(user("inventory-create@example.com")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
-        String update = "{\"expectedVersion\":0,\"placement\":" + body.replace("Banner", "Updated banner") + "}";
+        String update = "{\"expectedVersion\":0,\"placement\":" + body.replace("Banner", "Updated banner").replace("\"x\":1000", "\"x\":3000") + "}";
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
                 .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(update))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Updated banner"))
-                .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.active").value(false));
+                .andExpect(jsonPath("$.zone.x").value(3000)).andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.active").value(false));
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
                 .with(user("inventory-create@example.com")).with(csrf()).contentType("application/json").content(update))
                 .andExpect(status().isConflict());
@@ -770,6 +792,7 @@ class ChannelRepositoryTest {
         mvc.perform(post("/api/placements").with(csrf()).contentType("application/json").content(body))
                 .andExpect(status().isUnauthorized());
         for (String invalid : java.util.List.of(body.replace("\"widthPx\":320", "\"widthPx\":0"),
+                body.replace("\"x\":1000", "\"x\":9000"),
                 body.replace("\"minimumPrice\":200", "\"minimumPrice\":0.001"),
                 body.replace("\"minimumPrice\":200", "\"minimumPrice\":null"),
                 body.replace("\"currency\":\"PLN\"", "\"currency\":\"pln\""),
@@ -801,7 +824,7 @@ class ChannelRepositoryTest {
         var channel = channelForRefresh("inventory-owner@example.com");
         var now = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         var placement = new com.streambid.inventory.AdPlacement(UUID.randomUUID(), channel.id(), "Banner", "Top right",
-                320, 180, 3600, new java.math.BigDecimal("200.00"), "PLN", false, 1, false, 0, now, now);
+                320, 180, 3600, new java.math.BigDecimal("200.00"), "PLN", false, 1, null, false, 0, now, now);
         assertThat(placements.insertOwned(placement, UUID.randomUUID())).isEmpty();
         assertThat(placements.insertOwned(placement, channel.userId())).contains(placement);
         assertThat(placements.findOwned(placement.id(), UUID.randomUUID())).isEmpty();

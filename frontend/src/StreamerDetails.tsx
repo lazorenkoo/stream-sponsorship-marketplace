@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { OfferForm } from './OfferForm'
+import type { Rectangle } from './StreamAreaPicker'
 import { StreamerPhoto, type Streamer } from './StreamerCatalog'
 
 export type Placement = {
@@ -9,9 +10,10 @@ export type Placement = {
   widthPx: number
   heightPx: number
   durationSeconds: number
-  minimumPrice: number
+  minimumPrice: number | null
   currency: string
   negotiable: boolean
+  zone: Rectangle | null
   unrestrictedCategories: boolean
   allowedCategories: string[]
 }
@@ -102,7 +104,7 @@ export function StreamerDetails({ id }: { id: string }) {
             {placements.map(placement => <li key={placement.id} className="min-w-0 space-y-1 rounded-xl border border-sky-100 bg-white p-4">
               <h3 className="break-words font-semibold">{placement.title}</h3>
               <p className="break-words text-sm text-slate-600">{placement.position} · {placement.widthPx} × {placement.heightPx} px · {placement.durationSeconds} s</p>
-              <p className="text-sm font-medium">{placement.negotiable ? 'From ' : ''}{placement.minimumPrice.toFixed(2)} {placement.currency}</p>
+              <p className="text-sm font-medium">{placement.minimumPrice === null ? 'Negotiable price' : (placement.negotiable ? 'From ' : '') + placement.minimumPrice.toFixed(2) + ' ' + placement.currency}</p>
               <p className="break-words text-sm text-slate-600">{placement.unrestrictedCategories ? 'All advertising categories' : placement.allowedCategories.join(', ')}</p>
               {canOffer && <button type="button" className="mt-2 rounded-lg bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-900"
                 onClick={() => setSelectedPlacement(placement)}>Make an offer</button>}

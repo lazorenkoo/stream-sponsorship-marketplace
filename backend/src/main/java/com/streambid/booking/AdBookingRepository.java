@@ -47,10 +47,11 @@ public class AdBookingRepository {
                 WHERE o.id = ? AND o.version = ? AND o.status IN ('PENDING', 'COUNTERED')
                   AND (o.advertiser_id = ? OR o.streamer_id = ?) AND r.proposed_by <> ?
                   AND r.offer_id = o.id AND r.revision = o.current_revision AND p.id = o.placement_id
-                  AND a.id = r.creative_id AND a.advertiser_id = o.advertiser_id AND a.status = 'APPROVED'
+                  AND a.id = r.creative_id AND a.advertiser_id = o.advertiser_id
                   AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ?
                       AND role = CASE WHEN o.advertiser_id = ? THEN 'ADVERTISER' ELSE 'STREAMER' END)
                   AND p.active AND p.currency = r.currency
+                  AND placement_allows_rectangle(p, r.rectangle_x, r.rectangle_y, r.rectangle_width, r.rectangle_height)
                   AND EXISTS (SELECT 1 FROM channel_credentials WHERE channel_id = p.channel_id)
                   AND EXISTS (SELECT 1 FROM channel_listings WHERE channel_id = p.channel_id AND listed)
                   AND (p.negotiable OR (p.minimum_price = r.price AND p.duration_seconds = r.duration_seconds))

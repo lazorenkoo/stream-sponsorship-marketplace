@@ -1,5 +1,7 @@
 package com.streambid.inventory;
 
+import com.streambid.offer.OfferRectangle;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -9,7 +11,7 @@ import java.util.UUID;
 
 public record AdPlacement(UUID id, UUID channelId, String title, String position, int widthPx, int heightPx,
         int durationSeconds, BigDecimal minimumPrice, String currency, boolean negotiable, int capacity,
-        boolean active, long version, Instant createdAt, Instant updatedAt) {
+        OfferRectangle zone, boolean active, long version, Instant createdAt, Instant updatedAt) {
     public AdPlacement {
         Objects.requireNonNull(id, "Placement ID is required");
         Objects.requireNonNull(channelId, "Channel ID is required");

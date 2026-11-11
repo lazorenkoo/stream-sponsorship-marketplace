@@ -107,7 +107,7 @@ class UserRepositoryTest {
 
     @Autowired com.streambid.offer.AdOfferRepository offers;
     @Test
-    void offerDraftStoresRectangleAndRejectsUnapprovedCreative() throws Exception {
+    void offerDraftUsesUploadedCreativeAndKeepsPreviewPrivate() throws Exception {
         UUID advertiser = UUID.randomUUID(), streamer = UUID.randomUUID(), channel = UUID.randomUUID(), placement = UUID.randomUUID();
         users.save(new UserAccount(advertiser, "offer-advertiser@example.com", "hash", "Advertiser"));
         users.save(new UserAccount(streamer, "offer-streamer@example.com", "hash", "Streamer"));
@@ -131,9 +131,6 @@ class UserRepositoryTest {
                 com.streambid.creative.CreativeStatus.PENDING, 0, now));
         var terms = new com.streambid.offer.OfferTerms(creative.id(), new java.math.BigDecimal("350"), "PLN", 5400,
                 com.streambid.offer.OfferMode.FLEXIBLE, null, "gaming", new com.streambid.offer.OfferRectangle(1000, 2000, 3000, 4000));
-        assertThat(offers.createDraft(UUID.randomUUID(), advertiser, placement, terms, now)).isEmpty();
-        users.addRole(streamer, UserRole.ADMIN);
-        creatives.review(creative.id(), streamer, com.streambid.creative.CreativeStatus.APPROVED, null, 0, now);
         UUID id = UUID.randomUUID();
         assertThat(offers.createDraft(id, advertiser, placement, terms, now)).contains(id);
         assertThat(offers.existsForParty(id, advertiser)).isTrue();
@@ -148,6 +145,12 @@ class UserRepositoryTest {
         creativeDatabase.execute("UPDATE ad_offers SET status = 'PENDING', sent_at = created_at WHERE id = ?", id);
         assertThat(offers.findForParty(id, streamer)).isPresent();
         assertThat(offers.listForParty(streamer, null, 20)).hasSize(1);
+        String sentPreview = "/api/offers/" + id + "/revisions/0/creative";
+        mvc.perform(get(sentPreview).with(user("offer-streamer@example.com"))).andExpect(status().isServiceUnavailable());
+        users.save(new UserAccount(UUID.randomUUID(), "offer-outsider@example.com", "hash", "Outsider"));
+        mvc.perform(get(sentPreview).with(user("offer-outsider@example.com"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/offers/" + id + "/revisions/1/creative").with(user("offer-streamer@example.com")))
+                .andExpect(status().isNotFound());
         assertThat(offers.revisionsForParty(id, advertiser, null, 20).getFirst().terms()).isEqualTo(terms);
         assertThat(offers.revisionsForParty(id, UUID.randomUUID(), null, 20)).isEmpty();
         assertThat(offers.revisionsForParty(id, streamer, 0L, 20)).isEmpty();
@@ -177,6 +180,8 @@ class UserRepositoryTest {
         mvc.perform(get(location + "/revisions").with(user("offer-advertiser@example.com")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$[0].proposedByRole").value("ADVERTISER"));
         mvc.perform(get(location + "/revisions").with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
+        String preview = location + "/revisions/0/creative";
+        mvc.perform(get(preview).with(user("offer-streamer@example.com"))).andExpect(status().isNotFound());
         String send = location + "/send";
         mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
@@ -189,8 +194,13 @@ class UserRepositoryTest {
         mvc.perform(post(send).with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
 
-        mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk());
-        mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isOk());
+        mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.advertiser").value(true)).andExpect(jsonPath("$.recipient").value(false));
+        mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.advertiser").value(false)).andExpect(jsonPath("$.recipient").value(true));
+        mvc.perform(post(location + "/close").with(user("offer-streamer@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of(
+                        "expectedVersion", 1, "action", "WITHDRAW")))).andExpect(status().isConflict());
         UUID sentId = UUID.fromString(location.substring(location.lastIndexOf('/') + 1));
         var counter = new com.streambid.offer.OfferTerms(creative.id(), new java.math.BigDecimal("400"), "PLN", 3600,
                 com.streambid.offer.OfferMode.FLEXIBLE, null, "gaming", new com.streambid.offer.OfferRectangle(2000, 1000, 3000, 4000));

@@ -1,3 +1,4 @@
+import { PlacementSettings } from './PlacementSettings'
 import { ProfilePhoto } from './ProfilePhoto'
 import { useEffect, useState, type FormEvent } from 'react'
 
@@ -189,6 +190,7 @@ export function ProfileSettings() {
           </div>
           {channels?.map(channel => <ChannelVisibility key={channel.id} channel={channel} />)}
         </section>}
+        {streamer && channels && <PlacementSettings channels={channels} />}
         <div className="flex justify-end px-4 py-3 sm:px-5">
           <button type="submit" form="profile-settings-form"
             className={button + ' bg-sky-700 text-white hover:bg-sky-800'} disabled={pending}>Save profile</button>

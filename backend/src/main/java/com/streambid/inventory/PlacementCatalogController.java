@@ -1,5 +1,6 @@
 package com.streambid.inventory;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.CacheControl;
@@ -27,6 +28,16 @@ public class PlacementCatalogController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid advertising category");
         }
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.list(channelId, after, limit, category));
+    }
+
+    @GetMapping("/api/catalog/placements/{id}/hours")
+    public ResponseEntity<List<PlacementHours>> hours(@PathVariable UUID id, @RequestParam(required = false) Instant after,
+            @RequestParam(defaultValue = "20") int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Hours limit must be between 1 and 100");
+        }
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(placements.upcomingHours(id, after, limit)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND)));
     }
 
     @GetMapping("/api/catalog/placements/{id}")

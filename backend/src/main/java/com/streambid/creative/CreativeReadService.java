@@ -1,5 +1,6 @@
 package com.streambid.creative;
 
+import com.streambid.offer.AdOfferRepository;
 import com.streambid.user.UserRepository;
 import java.io.IOException;
 import java.security.MessageDigest;
@@ -15,11 +16,14 @@ import org.springframework.web.server.ResponseStatusException;
 public class CreativeReadService {
     private final UserRepository users;
     private final AdCreativeRepository creatives;
+    private final AdOfferRepository offers;
     private final ObjectProvider<S3CreativeStorage> storage;
 
-    public CreativeReadService(UserRepository users, AdCreativeRepository creatives, ObjectProvider<S3CreativeStorage> storage) {
+    public CreativeReadService(UserRepository users, AdCreativeRepository creatives, AdOfferRepository offers,
+            ObjectProvider<S3CreativeStorage> storage) {
         this.users = users;
         this.creatives = creatives;
+        this.offers = offers;
         this.storage = storage;
     }
 
@@ -35,6 +39,14 @@ public class CreativeReadService {
 
     public Content content(String email, UUID id) {
         return content(find(email, id));
+    }
+
+    public Content offerContent(String email, UUID offerId, long revision) {
+        var creative = offers.findForParty(offerId, owner(email))
+                .filter(offer -> offer.revision() == revision)
+                .flatMap(offer -> creatives.find(offer.terms().creativeId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return content(creative);
     }
 
     Content content(AdCreative creative) {

@@ -38,7 +38,15 @@ public class CreativeController {
 
     @GetMapping("/api/creatives/{id}/content")
     public ResponseEntity<byte[]> content(@PathVariable UUID id, Principal principal) {
-        var content = reads.content(principal.getName(), id);
+        return image(reads.content(principal.getName(), id), id);
+    }
+
+    @GetMapping("/api/offers/{id}/revisions/{revision}/creative")
+    public ResponseEntity<byte[]> offerContent(@PathVariable UUID id, @PathVariable long revision, Principal principal) {
+        return image(reads.offerContent(principal.getName(), id, revision), id);
+    }
+
+    private ResponseEntity<byte[]> image(CreativeReadService.Content content, UUID id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .contentType(org.springframework.http.MediaType.parseMediaType(content.format().contentType()))
                 .contentLength(content.bytes().length).header("X-Content-Type-Options", "nosniff")

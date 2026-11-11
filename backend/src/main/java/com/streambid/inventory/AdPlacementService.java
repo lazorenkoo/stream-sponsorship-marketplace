@@ -34,7 +34,7 @@ public class AdPlacementService {
         try {
             placement = new AdPlacement(UUID.randomUUID(), request.channelId(), request.title(), request.position(),
                     request.widthPx(), request.heightPx(), request.durationSeconds(), request.minimumPrice(), request.currency(),
-                    request.negotiable(), request.capacity(), false, 0, now, now);
+                    request.negotiable(), request.capacity(), request.zone(), false, 0, now, now);
         } catch (IllegalArgumentException | ArithmeticException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid advertising placement details");
         }
@@ -109,7 +109,7 @@ public class AdPlacementService {
             var now = clock.instant().isBefore(current.updatedAt()) ? current.updatedAt() : clock.instant();
             changed = new AdPlacement(id, current.channelId(), request.title(), request.position(), request.widthPx(),
                     request.heightPx(), request.durationSeconds(), request.minimumPrice(), request.currency(),
-                    request.negotiable(), request.capacity(), current.active(), current.version(), current.createdAt(), now);
+                    request.negotiable(), request.capacity(), request.zone(), current.active(), current.version(), current.createdAt(), now);
         } catch (IllegalArgumentException | ArithmeticException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid advertising placement details");
         }

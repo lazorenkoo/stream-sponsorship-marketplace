@@ -20,6 +20,6 @@ class AdPlacementTest {
     private AdPlacement placement(BigDecimal price, boolean negotiable) {
         var now = Instant.parse("2026-11-06T12:00:00Z");
         return new AdPlacement(UUID.randomUUID(), UUID.randomUUID(), "Banner", "Top right", 320, 180,
-                3600, price, "PLN", negotiable, 1, false, 0, now, now);
+                3600, price, "PLN", negotiable, 1, null, false, 0, now, now);
     }
 }

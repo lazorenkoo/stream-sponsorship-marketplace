@@ -19,20 +19,23 @@ public class AdOfferRepository {
 
     @Transactional
     public Optional<UUID> createDraft(UUID id, UUID advertiser, UUID placement, OfferTerms terms, Instant now) {
+        var rectangle = terms.rectangle();
         var inserted = database.fetchOptional("""
                 INSERT INTO ad_offers(id, placement_id, advertiser_id, streamer_id, created_at, updated_at)
                 SELECT ?, p.id, ?, c.user_id, CAST(? AS timestamptz), CAST(? AS timestamptz)
                 FROM ad_placements p JOIN connected_channels c ON c.id = p.channel_id
                 JOIN channel_listings l ON l.channel_id = c.id AND l.listed
                 JOIN channel_credentials t ON t.channel_id = c.id
-                JOIN ad_creatives a ON a.id = ? AND a.advertiser_id = ? AND a.status = 'APPROVED'
+                JOIN ad_creatives a ON a.id = ? AND a.advertiser_id = ?
                 WHERE p.id = ? AND p.active AND c.user_id <> ? AND p.currency = ?
+                  AND placement_allows_rectangle(p, ?, ?, ?, ?)
                   AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ? AND role = 'ADVERTISER')
                   AND (p.unrestricted_categories OR EXISTS (SELECT 1 FROM placement_advertising_categories
                       WHERE placement_id = p.id AND category = ?))
                 RETURNING id
                 """, id, advertiser, time(now), time(now), terms.creativeId(), advertiser, placement, advertiser,
-                terms.currency(), advertiser, terms.advertisingCategory());
+                terms.currency(), rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height(),
+                advertiser, terms.advertisingCategory());
         if (inserted.isEmpty()) return Optional.empty();
         appendRevision(id, 0, advertiser, terms, now);
         return Optional.of(id);
@@ -64,10 +67,11 @@ public class AdOfferRepository {
                 FROM ad_placements p, ad_offer_revisions r, ad_creatives a
                 WHERE o.id = ? AND o.advertiser_id = ? AND o.status = 'DRAFT' AND o.version = ?
                   AND p.id = o.placement_id AND p.active AND r.offer_id = o.id AND r.revision = o.current_revision
-                  AND a.id = r.creative_id AND a.advertiser_id = o.advertiser_id AND a.status = 'APPROVED'
+                  AND a.id = r.creative_id AND a.advertiser_id = o.advertiser_id
                   AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ? AND role = 'ADVERTISER')
                   AND EXISTS (SELECT 1 FROM channel_credentials WHERE channel_id = p.channel_id)
                   AND EXISTS (SELECT 1 FROM channel_listings WHERE channel_id = p.channel_id AND listed)
+                  AND placement_allows_rectangle(p, r.rectangle_x, r.rectangle_y, r.rectangle_width, r.rectangle_height)
                   AND p.currency = r.currency
                   AND (p.negotiable OR (p.minimum_price = r.price AND p.duration_seconds = r.duration_seconds))
                   AND (p.unrestricted_categories OR EXISTS (SELECT 1 FROM placement_advertising_categories
@@ -96,16 +100,18 @@ public class AdOfferRepository {
                 SELECT t.channel_id FROM channel_credentials t JOIN ad_placements p ON p.channel_id = t.channel_id
                 JOIN ad_offers o ON o.placement_id = p.id WHERE o.id = ? FOR SHARE OF t
                 """, id);
+        var rectangle = terms.rectangle();
         var current = database.fetchOptional("""
                 SELECT o.current_revision FROM ad_offers o
                 JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
                 JOIN ad_placements p ON p.id = o.placement_id
-                JOIN ad_creatives a ON a.id = ? AND a.advertiser_id = o.advertiser_id AND a.status = 'APPROVED'
+                JOIN ad_creatives a ON a.id = ? AND a.advertiser_id = o.advertiser_id
                 WHERE o.id = ? AND o.version = ? AND o.status IN ('PENDING', 'COUNTERED')
                   AND r.proposed_by <> ? AND (o.advertiser_id = ? OR o.streamer_id = ?)
                   AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ?
                       AND role = CASE WHEN o.advertiser_id = ? THEN 'ADVERTISER' ELSE 'STREAMER' END)
                   AND p.active AND p.currency = ?
+                  AND placement_allows_rectangle(p, ?, ?, ?, ?)
                   AND EXISTS (SELECT 1 FROM channel_listings WHERE channel_id = p.channel_id AND listed)
                   AND EXISTS (SELECT 1 FROM channel_credentials WHERE channel_id = p.channel_id)
                   AND (p.negotiable OR (p.minimum_price = ? AND p.duration_seconds = ?))
@@ -119,6 +125,7 @@ public class AdOfferRepository {
                           + ? * INTERVAL '1 second')))
                 FOR UPDATE OF o
                 """, terms.creativeId(), id, expectedVersion, actor, actor, actor, actor, actor, terms.currency(),
+                rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height(),
                 terms.price(), terms.durationSeconds(), terms.advertisingCategory(), terms.mode().name(), time(terms.startsAt()),
                 time(now), time(terms.startsAt()), time(terms.startsAt()), terms.durationSeconds(),
                 terms.mode().name(), time(now), terms.durationSeconds());
@@ -200,17 +207,18 @@ public class AdOfferRepository {
     private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit) {
         return database.fetch("""
                 SELECT o.id, o.placement_id, o.status, o.version, o.current_revision,
-                    o.created_at AS offer_created_at, o.updated_at, r.proposed_by <> ? AS recipient, r.*
+                    o.created_at AS offer_created_at, o.updated_at, r.proposed_by <> ? AS recipient, o.advertiser_id = ? AS advertiser, r.*
                 FROM ad_offers o JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
                 WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
                   AND (CAST(? AS uuid) IS NULL OR o.id = ?)
                   AND (CAST(? AS uuid) IS NULL OR o.id > ?)
                 ORDER BY o.id LIMIT ?
-                """, actor, actor, actor, id, id, after, after, limit).map(row -> {
+                """, actor, actor, actor, actor, id, id, after, after, limit).map(row -> {
             return new OfferView(row.get("id", UUID.class), row.get("placement_id", UUID.class),
                     OfferStatus.valueOf(row.get("status", String.class)), row.get("version", Long.class),
                     row.get("current_revision", Long.class), terms(row), row.get("offer_created_at", OffsetDateTime.class).toInstant(),
-                    row.get("updated_at", OffsetDateTime.class).toInstant(), row.get("recipient", Boolean.class));
+                    row.get("updated_at", OffsetDateTime.class).toInstant(), row.get("recipient", Boolean.class),
+                    row.get("advertiser", Boolean.class));
         });
     }
 

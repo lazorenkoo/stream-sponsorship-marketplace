@@ -1,29 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
 
-type Creative = { id: string; title: string; format: string; widthPx: number; heightPx: number; status: string }
-type Review = { reason: string | null }
+type Creative = { id: string; title: string; format: string; widthPx: number; heightPx: number }
 
 const pageSize = 20
 const input = 'mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
 const button = 'rounded-lg bg-sky-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50'
-const labels: Record<string, string> = { PENDING: 'Pending review', APPROVED: 'Approved', REJECTED: 'Rejected' }
 
 function CreativeCard({ creative }: { creative: Creative }) {
   const [unavailable, setUnavailable] = useState(false)
-  const [review, setReview] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (creative.status !== 'REJECTED') return
-    const controller = new AbortController()
-    fetch('/api/creatives/' + creative.id + '/reviews?limit=1', { signal: controller.signal, cache: 'no-store' })
-      .then(async response => {
-        if (!response.ok) return
-        const events: Review[] = await response.json()
-        if (!controller.signal.aborted) setReview(events[0]?.reason ?? null)
-      })
-      .catch(() => {})
-    return () => controller.abort()
-  }, [creative.id, creative.status])
 
   return (
     <li className="min-w-0 overflow-hidden rounded-xl border border-sky-100 bg-white">
@@ -35,8 +19,6 @@ function CreativeCard({ creative }: { creative: Creative }) {
       <div className="space-y-1 p-4">
         <h2 className="break-words font-semibold">{creative.title}</h2>
         <p className="text-sm text-slate-600">{creative.format} · {creative.widthPx} × {creative.heightPx} px</p>
-        <p className="text-sm font-medium">{labels[creative.status] ?? creative.status}</p>
-        {review && <p className="break-words text-sm text-slate-700">{review}</p>}
       </div>
     </li>
   )
@@ -119,7 +101,7 @@ export function CreativesPage() {
       const response = await fetch('/api/creatives', { method: 'POST', headers: { [headerName]: token }, body })
       if (!response.ok) throw new Error(String(response.status))
       form.reset()
-      setMessage('Creative uploaded and sent for review.')
+      setMessage('Creative uploaded. You can now attach it to an offer.')
       refresh()
     } catch (failure) {
       const status = failure instanceof Error ? failure.message : ''

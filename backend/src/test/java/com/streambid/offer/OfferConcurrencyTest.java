@@ -64,7 +64,6 @@ class OfferConcurrencyTest {
         var now = Instant.now();
         var creative = creatives.insertPending(new AdCreative(UUID.randomUUID(), advertiser, "Banner", CreativeFormat.PNG,
                 320, 180, 100, "a".repeat(64), CreativeStatus.PENDING, 0, now));
-        creatives.review(creative.id(), streamer, CreativeStatus.APPROVED, null, 0, now);
         var terms = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60, OfferMode.FLEXIBLE, null,
                 "gaming", new OfferRectangle(0, 0, 2000, 1000));
         var draft = service.create("race-advertiser@example.com", new CreateOfferRequest(placement, terms));
@@ -150,6 +149,19 @@ class OfferConcurrencyTest {
         assertThat(bookings.accept(bookable.id(), streamer, 1, Instant.now())).isEmpty();
         var disjoint = new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60, OfferMode.SCHEDULED,
                 scheduled.startsAt(), "gaming", new OfferRectangle(5000, 5000, 1000, 1000));
+        var outsideDraft = service.create("race-advertiser@example.com", new CreateOfferRequest(placement, disjoint));
+        var outsidePending = sentOffer(placement, new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60,
+                OfferMode.SCHEDULED, scheduled.startsAt().plusSeconds(360), "gaming", disjoint.rectangle()));
+        database.execute("UPDATE ad_placements SET zone_x=0, zone_y=0, zone_width=2000, zone_height=1000 WHERE id = ?", placement);
+        assertThat(offers.createDraft(UUID.randomUUID(), advertiser, placement, disjoint, Instant.now())).isEmpty();
+        assertThat(offers.createDraft(UUID.randomUUID(), advertiser, placement, scheduled, Instant.now())).isPresent();
+        assertThat(offers.sendDraft(outsideDraft.id(), advertiser, 0, Instant.now())).isFalse();
+        assertThat(offers.counter(outsidePending, streamer, 1, new OfferTerms(creative.id(), new BigDecimal("100"), "PLN", 60,
+                OfferMode.SCHEDULED, scheduled.startsAt(), "gaming", new OfferRectangle(1999, 0, 2, 1000)), Instant.now())).isFalse();
+        assertThat(bookings.accept(outsidePending, streamer, 1, Instant.now())).isEmpty();
+        database.execute("UPDATE ad_placements SET zone_x=NULL, zone_y=NULL, zone_width=NULL, zone_height=NULL WHERE id = ?", placement);
+        assertThat(offers.sendDraft(outsideDraft.id(), advertiser, 0, Instant.now())).isTrue();
+
         UUID capacityBlocked = sentOffer(placement, disjoint);
         assertThat(bookings.accept(capacityBlocked, streamer, 1, Instant.now())).isEmpty();
         assertThat(service.find("race-advertiser@example.com", capacityBlocked).status()).isEqualTo(OfferStatus.PENDING);

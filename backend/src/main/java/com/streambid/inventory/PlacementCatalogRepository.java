@@ -1,5 +1,8 @@
 package com.streambid.inventory;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,10 +32,29 @@ public class PlacementCatalogRepository {
         return query(id, null, null, 1, null).stream().findFirst();
     }
 
+    public Optional<List<PlacementHours>> upcomingHours(UUID id, Instant after, int limit) {
+        var cursor = after == null ? null : OffsetDateTime.ofInstant(after, ZoneOffset.UTC);
+        var rows = database.fetch("""
+                SELECT a.starts_at, a.ends_at
+                FROM ad_placements p JOIN channel_listings l ON l.channel_id = p.channel_id AND l.listed
+                JOIN channel_credentials t ON t.channel_id = p.channel_id
+                LEFT JOIN placement_availability a ON a.placement_id = p.id AND a.ends_at > statement_timestamp()
+                    AND (CAST(? AS timestamptz) IS NULL OR a.starts_at > CAST(? AS timestamptz))
+                WHERE p.id = ? AND p.active
+                ORDER BY a.starts_at LIMIT ?
+                """, cursor, cursor, id, limit);
+        if (rows.isEmpty()) return Optional.empty();
+        return Optional.of(rows.stream().filter(row -> row.get("starts_at") != null)
+                .map(row -> new PlacementHours(row.get("starts_at", OffsetDateTime.class).toInstant(),
+                        row.get("ends_at", OffsetDateTime.class).toInstant()))
+                .toList());
+    }
+
     private List<AvailablePlacement> query(UUID id, UUID channelId, UUID after, int limit, String category) {
         return database.fetch("""
                 SELECT p.id, p.channel_id, p.title, p.position, p.width_px, p.height_px, p.duration_seconds,
                     p.minimum_price, p.currency, p.negotiable, p.capacity, p.unrestricted_categories,
+                    p.zone_x, p.zone_y, p.zone_width, p.zone_height,
                     ARRAY(SELECT category FROM placement_advertising_categories WHERE placement_id = p.id ORDER BY category) AS categories
                 FROM ad_placements p JOIN channel_listings l ON l.channel_id = p.channel_id AND l.listed
                 JOIN channel_credentials t ON t.channel_id = p.channel_id
@@ -50,6 +72,6 @@ public class PlacementCatalogRepository {
                         row.get("height_px", Integer.class), row.get("duration_seconds", Integer.class),
                         row.get("minimum_price", java.math.BigDecimal.class), row.get("currency", String.class),
                         row.get("negotiable", Boolean.class), row.get("capacity", Integer.class),
-                        row.get("unrestricted_categories", Boolean.class), List.of(row.get("categories", String[].class))));
+                        AdPlacementRepository.mapZone(row), row.get("unrestricted_categories", Boolean.class), List.of(row.get("categories", String[].class))));
     }
 }
