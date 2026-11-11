@@ -19,6 +19,10 @@ export function Header() {
     return () => controller.abort()
   }, [])
 
+  const campaigns = window.location.pathname.startsWith('/campaigns')
+  const currentTab = 'rounded-full bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-900'
+  const otherTab = 'rounded-full px-4 py-2 text-sm font-medium text-slate-600 hover:bg-sky-50'
+
   return (
     <header className="border-b border-sky-100 bg-white">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-4 sm:px-8">
@@ -30,15 +34,16 @@ export function Header() {
         </a>
 
         <nav aria-label="Marketplace" className="order-last flex w-full gap-1 sm:order-none sm:w-auto">
-          <a href="/" aria-current="page" className="rounded-full bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-900">
+          <a href="/" aria-current={window.location.pathname === '/' ? 'page' : undefined} className={campaigns ? otherTab : currentTab}>
             Streamers
           </a>
-          <a href="/campaigns" className="rounded-full px-4 py-2 text-sm font-medium text-slate-600 hover:bg-sky-50">
+          <a href="/campaigns" aria-current={window.location.pathname === '/campaigns' ? 'page' : undefined} className={campaigns ? currentTab : otherTab}>
             Ad Campaigns
           </a>
         </nav>
 
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+          {advertiser && <a href="/campaigns/manage" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">My campaigns</a>}
           {advertiser && <a href="/creatives" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Creatives</a>}
           <a href="/bookings" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Bookings</a>
           <a href="/offers" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Offers</a>
