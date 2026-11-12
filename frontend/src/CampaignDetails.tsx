@@ -3,14 +3,14 @@ import { postJson } from './offerApi'
 import { platforms, type PublishedCampaign } from './StreamerCatalog'
 
 type Channel = { id: string; displayName: string; platform: string; authorizationRequired: boolean }
-type Participation = {
+export type Participation = {
   id: string
   channelId: string
   direction: 'APPLICATION' | 'INVITATION'
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'WITHDRAWN'
   version: number
 }
-const statusLabels = { PENDING: 'Pending', ACCEPTED: 'Accepted', REJECTED: 'Declined', WITHDRAWN: 'Withdrawn' }
+export const statusLabels = { PENDING: 'Pending', ACCEPTED: 'Accepted', REJECTED: 'Declined', WITHDRAWN: 'Withdrawn' }
 const primary = 'rounded-lg bg-sky-700 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50'
 const secondary = 'rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-sky-50 disabled:opacity-50'
 
