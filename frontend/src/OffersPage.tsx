@@ -3,6 +3,7 @@ import { postJson } from './offerApi'
 import { OfferHistory } from './OfferHistory'
 
 type Offer = {
+  campaignId: string | null
   id: string
   version: number
   revision: number
@@ -35,6 +36,7 @@ const pageSize = 20
 const actionClass = 'rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50'
 
 export function OffersPage() {
+  const campaignId = new URLSearchParams(window.location.search).get('campaign')
   const [offers, setOffers] = useState<Offer[]>([])
   const [cursor, setCursor] = useState('')
   const [next, setNext] = useState('')
@@ -49,6 +51,7 @@ export function OffersPage() {
   useEffect(() => {
     const controller = new AbortController()
     const query = new URLSearchParams({ limit: String(pageSize + 1) })
+    if (campaignId) query.set('campaignId', campaignId)
     if (cursor) query.set('after', cursor)
     fetch('/api/offers?' + query, { signal: controller.signal, cache: 'no-store' })
       .then(async response => {
@@ -63,7 +66,7 @@ export function OffersPage() {
       })
       .catch(() => { if (!controller.signal.aborted) setStatus('error') })
     return () => controller.abort()
-  }, [cursor, retry])
+  }, [cursor, retry, campaignId])
 
   async function respond(offer: Offer, action: Action) {
     if (busy) return
@@ -96,7 +99,11 @@ export function OffersPage() {
 
   return (
     <main className="mx-auto max-w-4xl space-y-4 px-4 py-8 text-slate-900">
-      <h1 className="text-2xl font-semibold">Offers</h1>
+      <h1 className="text-2xl font-semibold">{campaignId ? 'Campaign offers' : 'Offers'}</h1>
+      {campaignId && <div className="flex flex-wrap gap-3 text-sm font-medium text-sky-800">
+        <a href="/campaigns/manage" className="underline">My campaigns</a>
+        <a href="/offers" className="underline">All offers</a>
+      </div>}
       {status === 'loading' && <p role="status">Loading offers…</p>}
       {status === 'guest' && <p><a className="text-sky-800 underline" href="/login">Log in</a> to view your offers.</p>}
       {status === 'error' && <p role="alert">Could not load offers. <button type="button" className="underline"
@@ -116,6 +123,9 @@ export function OffersPage() {
           return (
             <li key={offer.id} className="grid gap-4 rounded-xl border border-sky-100 bg-white p-4 sm:grid-cols-[1fr_12rem]">
               <div className="space-y-2">
+                {offer.campaignId && <a href={'/campaigns/' + offer.campaignId} className="text-sm font-medium text-sky-800 underline">
+                  View linked campaign
+                </a>}
                 <h2 className="font-semibold">{terms.advertisingCategory} · {terms.price.toFixed(2)} {terms.currency}</h2>
                 <p className="text-sm text-slate-700">{terms.startsAt ? new Date(terms.startsAt).toLocaleString('en') : 'Flexible start'} · {terms.durationSeconds} s</p>
                 <p className="text-sm text-slate-600">{offer.advertiser ? 'Your offer' : 'For your channel'} · {statusLabel[offer.status] ?? offer.status}</p>

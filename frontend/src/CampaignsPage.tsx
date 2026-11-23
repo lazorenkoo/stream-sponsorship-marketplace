@@ -149,6 +149,7 @@ function CampaignCard({ campaign, onSaved }: { campaign: Campaign; onSaved: (cam
       {campaign.status === 'PUBLISHED' && <a className={secondary} href={'/campaigns/' + campaign.id}>View campaign</a>}
       <button type="button" className={secondary} onClick={() => setPanel('archive')}>Archive</button>
     </div>}
+    {!panel && <a className={secondary} href={'/offers?campaign=' + campaign.id}>View offers</a>}
     {!panel && campaign.status !== 'DRAFT' && <button type="button" className={secondary}
       onClick={() => setPanel('applications')}>View applications</button>}
     {!panel && campaign.status !== 'DRAFT' && <button type="button" className={secondary}

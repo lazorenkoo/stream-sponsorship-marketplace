@@ -21,6 +21,7 @@ export type Placement = {
 const pageSize = 20
 
 export function StreamerDetails({ id }: { id: string }) {
+  const campaignId = new URLSearchParams(window.location.search).get('campaign')
   const [channel, setChannel] = useState<Streamer | null>(null)
   const [placements, setPlacements] = useState<Placement[]>([])
   const [after, setAfter] = useState('')
@@ -93,6 +94,9 @@ export function StreamerDetails({ id }: { id: string }) {
             {channel.channelDescription && <p className="mt-3 whitespace-pre-line break-words">{channel.channelDescription}</p>}
           </div>
         </header>
+        {campaignId && <a className="text-sm font-medium text-sky-800 underline" href={'/campaigns/' + encodeURIComponent(campaignId)}>
+          View linked campaign
+        </a>}
         <section aria-labelledby="placements-heading" className="space-y-3">
           <h2 id="placements-heading" className="text-xl font-semibold">Available ad placements</h2>
           {placementStatus === 'loading' && <p role="status">Loading placements…</p>}
@@ -113,7 +117,7 @@ export function StreamerDetails({ id }: { id: string }) {
           {next && placementStatus === 'ready' && <button type="button" className="rounded-lg bg-sky-100 px-4 py-2 font-semibold text-sky-900"
             onClick={() => { setPlacementStatus('loading'); setAfter(next) }}>Show more</button>}
         </section>
-        {selectedPlacement && <OfferForm key={selectedPlacement.id} channelId={id} placement={selectedPlacement}
+        {selectedPlacement && <OfferForm key={selectedPlacement.id} channelId={id} campaignId={campaignId} placement={selectedPlacement}
           close={() => setSelectedPlacement(null)} />}
       </>}
     </main>

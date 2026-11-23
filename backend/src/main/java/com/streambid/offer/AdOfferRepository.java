@@ -19,22 +19,34 @@ public class AdOfferRepository {
 
     @Transactional
     public Optional<UUID> createDraft(UUID id, UUID advertiser, UUID placement, OfferTerms terms, Instant now) {
+        return createDraft(id, advertiser, placement, terms, now, null);
+    }
+
+    @Transactional
+    public Optional<UUID> createDraft(UUID id, UUID advertiser, UUID placement, OfferTerms terms, Instant now,
+            UUID campaignId) {
         var rectangle = terms.rectangle();
         var inserted = database.fetchOptional("""
-                INSERT INTO ad_offers(id, placement_id, advertiser_id, streamer_id, created_at, updated_at)
-                SELECT ?, p.id, ?, c.user_id, CAST(? AS timestamptz), CAST(? AS timestamptz)
+                INSERT INTO ad_offers(id, placement_id, advertiser_id, streamer_id, created_at, updated_at, campaign_id)
+                SELECT ?, p.id, ?, c.user_id, CAST(? AS timestamptz), CAST(? AS timestamptz), CAST(? AS uuid)
                 FROM ad_placements p JOIN connected_channels c ON c.id = p.channel_id
                 JOIN channel_listings l ON l.channel_id = c.id AND l.listed
                 JOIN channel_credentials t ON t.channel_id = c.id
                 JOIN ad_creatives a ON a.id = ? AND a.advertiser_id = ?
                 WHERE p.id = ? AND p.active AND c.user_id <> ? AND p.currency = ?
+                  AND (CAST(? AS uuid) IS NULL OR EXISTS (
+                      SELECT 1 FROM campaigns campaign
+                      JOIN campaign_participations participation ON participation.campaign_id = campaign.id
+                      WHERE campaign.id = ? AND campaign.advertiser_id = a.advertiser_id AND campaign.status = 'PUBLISHED'
+                        AND participation.channel_id = c.id AND participation.status = 'ACCEPTED'
+                      FOR SHARE OF campaign))
                   AND placement_allows_rectangle(p, ?, ?, ?, ?)
                   AND EXISTS (SELECT 1 FROM user_roles WHERE user_id = ? AND role = 'ADVERTISER')
                   AND (p.unrestricted_categories OR EXISTS (SELECT 1 FROM placement_advertising_categories
                       WHERE placement_id = p.id AND category = ?))
                 RETURNING id
-                """, id, advertiser, time(now), time(now), terms.creativeId(), advertiser, placement, advertiser,
-                terms.currency(), rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height(),
+                """, id, advertiser, time(now), time(now), campaignId, terms.creativeId(), advertiser, placement, advertiser,
+                terms.currency(), campaignId, campaignId, rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height(),
                 advertiser, terms.advertisingCategory());
         if (inserted.isEmpty()) return Optional.empty();
         appendRevision(id, 0, advertiser, terms, now);
@@ -196,29 +208,34 @@ public class AdOfferRepository {
     }
 
     public Optional<OfferView> findForParty(UUID id, UUID actor) {
-        return queryForParty(id, actor, null, 1).stream().findFirst();
+        return queryForParty(id, actor, null, 1, null).stream().findFirst();
     }
 
     public java.util.List<OfferView> listForParty(UUID actor, UUID after, int limit) {
-        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Offer limit must be between 1 and 100");
-        return queryForParty(null, actor, after, limit);
+        return listForParty(actor, after, limit, null);
     }
 
-    private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit) {
+    public java.util.List<OfferView> listForParty(UUID actor, UUID after, int limit, UUID campaignId) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Offer limit must be between 1 and 100");
+        return queryForParty(null, actor, after, limit, campaignId);
+    }
+
+    private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit, UUID campaignId) {
         return database.fetch("""
-                SELECT o.id, o.placement_id, o.status, o.version, o.current_revision,
+                SELECT o.id, o.placement_id, o.campaign_id, o.status, o.version, o.current_revision,
                     o.created_at AS offer_created_at, o.updated_at, r.proposed_by <> ? AS recipient, o.advertiser_id = ? AS advertiser, r.*
                 FROM ad_offers o JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
                 WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
                   AND (CAST(? AS uuid) IS NULL OR o.id = ?)
                   AND (CAST(? AS uuid) IS NULL OR o.id > ?)
+                  AND (CAST(? AS uuid) IS NULL OR o.campaign_id = ?)
                 ORDER BY o.id LIMIT ?
-                """, actor, actor, actor, actor, id, id, after, after, limit).map(row -> {
+                """, actor, actor, actor, actor, id, id, after, after, campaignId, campaignId, limit).map(row -> {
             return new OfferView(row.get("id", UUID.class), row.get("placement_id", UUID.class),
                     OfferStatus.valueOf(row.get("status", String.class)), row.get("version", Long.class),
                     row.get("current_revision", Long.class), terms(row), row.get("offer_created_at", OffsetDateTime.class).toInstant(),
                     row.get("updated_at", OffsetDateTime.class).toInstant(), row.get("recipient", Boolean.class),
-                    row.get("advertiser", Boolean.class));
+                    row.get("advertiser", Boolean.class), row.get("campaign_id", UUID.class));
         });
     }
 

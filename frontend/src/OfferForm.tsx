@@ -19,7 +19,7 @@ function overlaps(a: Rectangle, b: Rectangle) {
     && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-export function OfferForm({ channelId, placement, close }: { channelId: string; placement: Placement; close: () => void }) {
+export function OfferForm({ channelId, campaignId, placement, close }: { channelId: string; campaignId: string | null; placement: Placement; close: () => void }) {
   const [creatives, setCreatives] = useState<Creative[] | null>(null)
   const [start, setStart] = useState('')
   const [chosenInstant, setChosenInstant] = useState<string | null>(null)
@@ -100,7 +100,7 @@ export function OfferForm({ channelId, placement, close }: { channelId: string; 
     setError('')
     let saved = draft
     try {
-      saved ??= await postJson<Draft>('/api/offers', { placementId: placement.id, terms: {
+      saved ??= await postJson<Draft>('/api/offers', { placementId: placement.id, campaignId, terms: {
         creativeId: data.get('creativeId'), price: placement.negotiable ? data.get('price') : placement.minimumPrice,
         currency: placement.currency, durationSeconds: seconds, mode: 'SCHEDULED',
         startsAt: startInstant, advertisingCategory: data.get('category'), rectangle,
@@ -112,7 +112,7 @@ export function OfferForm({ channelId, placement, close }: { channelId: string; 
       setError(saved
         ? 'The offer was saved as a draft. Check the placement availability and retry sending.'
         : failure instanceof Error && failure.message === '409'
-          ? 'This placement or creative is no longer eligible for the offer.'
+          ? 'This placement, campaign or creative is no longer eligible for the offer.'
           : 'Could not create the offer. Check the terms and try again.')
     } finally { setBusy(false) }
   }
@@ -120,7 +120,7 @@ export function OfferForm({ channelId, placement, close }: { channelId: string; 
   return (
     <form onSubmit={submit} className="space-y-4 rounded-xl border border-sky-200 bg-white p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-semibold">Make an offer · {placement.title}</h2>
+        <h2 className="font-semibold">{campaignId ? 'Make a campaign offer' : 'Make an offer'} · {placement.title}</h2>
         <button type="button" disabled={busy} onClick={close} className="text-sm text-sky-800 underline">Close</button>
       </div>
       {sent ? <p role="status">Offer sent. The streamer can now review it.{' '}

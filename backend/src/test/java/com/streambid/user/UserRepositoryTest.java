@@ -287,6 +287,35 @@ class UserRepositoryTest {
         mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("limit", "101"))
                 .andExpect(status().isBadRequest());
 
+        UUID campaign = UUID.randomUUID();
+        creativeDatabase.execute("""
+                INSERT INTO campaigns(id, advertiser_id, title, status, created_at, updated_at, published_at)
+                VALUES (?, ?, 'Linked campaign', 'PUBLISHED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, campaign, advertiser);
+        UUID participation = UUID.randomUUID();
+        creativeDatabase.execute("""
+                INSERT INTO campaign_participations(id, campaign_id, channel_id, initiated_by, direction, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'APPLICATION', 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, participation, campaign, channel, streamer);
+        var linkedBody = json.writeValueAsString(new com.streambid.offer.CreateOfferRequest(placement, terms, campaign));
+        mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(linkedBody)).andExpect(status().isConflict());
+        creativeDatabase.execute("UPDATE campaign_participations SET status = 'ACCEPTED' WHERE id = ?", participation);
+        var linked = mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(linkedBody)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.campaignId").value(campaign.toString())).andReturn();
+        mvc.perform(get(linked.getResponse().getHeader("Location")).with(user("offer-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.campaignId").value(campaign.toString()));
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("campaignId", campaign.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].campaignId").value(campaign.toString()));
+        mvc.perform(get("/api/offers").with(user("offer-streamer@example.com")).param("campaignId", campaign.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("campaignId", UUID.randomUUID().toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        creativeDatabase.execute("UPDATE campaigns SET status = 'ARCHIVED' WHERE id = ?", campaign);
+        mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(linkedBody)).andExpect(status().isConflict());
     }
 
     @Autowired org.springframework.transaction.PlatformTransactionManager creativeTransactions;
