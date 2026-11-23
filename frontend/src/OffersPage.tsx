@@ -1,16 +1,20 @@
 import { useEffect, useState } from 'react'
 import { postJson } from './offerApi'
+import { CounterOfferForm } from './CounterOfferForm'
 import { OfferHistory } from './OfferHistory'
 
-type Offer = {
+export type Offer = {
   campaignId: string | null
   id: string
+  placementId: string
   version: number
   revision: number
   status: string
   recipient: boolean
   advertiser: boolean
   terms: {
+    creativeId: string
+    mode: 'SCHEDULED' | 'FLEXIBLE'
     price: number
     currency: string
     startsAt: string | null
@@ -47,6 +51,7 @@ export function OffersPage() {
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const [withdrawing, setWithdrawing] = useState('')
+  const [countering, setCountering] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
@@ -129,12 +134,21 @@ export function OffersPage() {
                 <h2 className="font-semibold">{terms.advertisingCategory} · {terms.price.toFixed(2)} {terms.currency}</h2>
                 <p className="text-sm text-slate-700">{terms.startsAt ? new Date(terms.startsAt).toLocaleString('en') : 'Flexible start'} · {terms.durationSeconds} s</p>
                 <p className="text-sm text-slate-600">{offer.advertiser ? 'Your offer' : 'For your channel'} · {statusLabel[offer.status] ?? offer.status}</p>
-                {canRespond && <div className="flex gap-2">
+                {canRespond && countering !== offer.id && <div className="flex flex-wrap gap-2">
                   <button type="button" disabled={!!busy || !terms.startsAt} onClick={() => void respond(offer, 'accept')}
                     className={actionClass + ' bg-sky-700 text-white'}>Accept and reserve</button>
                   <button type="button" disabled={!!busy} onClick={() => void respond(offer, 'decline')}
                     className={actionClass}>Decline</button>
+                  <button type="button" className={actionClass} disabled={!!busy}
+                    onClick={() => setCountering(offer.id)}>Suggest changes</button>
                 </div>}
+                {canRespond && countering === offer.id && <CounterOfferForm key={offer.id + ':' + offer.version} offer={offer}
+                  close={() => setCountering('')} onBusy={pending => setBusy(pending ? offer.id : '')}
+                  onSaved={saved => {
+                    setOffers(previous => previous.map(item => item.id === saved.id ? saved : item))
+                    setCountering('')
+                    setMessage('Changes sent. The other party can now review the revised offer.')
+                  }} />}
                 {(canSend || canWithdraw) && <div className="flex flex-wrap gap-2">
                   {canSend && <button type="button" disabled={!!busy} className={actionClass + ' bg-sky-700 text-white'}
                     onClick={() => void respond(offer, 'send')}>Send draft</button>}
