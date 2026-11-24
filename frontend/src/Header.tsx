@@ -2,7 +2,7 @@ import { Radio } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 export function Header() {
-  const [advertiser, setAdvertiser] = useState(false)
+  const [roles, setRoles] = useState<string[]>([])
   const [signedOut, setSignedOut] = useState(false)
 
   useEffect(() => {
@@ -12,13 +12,14 @@ export function Header() {
         if (!controller.signal.aborted) setSignedOut(response.status === 401)
         if (response.ok) {
           const profile: { roles: string[] } = await response.json()
-          if (!controller.signal.aborted) setAdvertiser(profile.roles.includes('ADVERTISER'))
+          if (!controller.signal.aborted) setRoles(profile.roles)
         }
       })
       .catch(() => {})
     return () => controller.abort()
   }, [])
 
+  const advertiser = roles.includes('ADVERTISER')
   const campaigns = window.location.pathname.startsWith('/campaigns')
   const currentTab = 'rounded-full bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-900'
   const otherTab = 'rounded-full px-4 py-2 text-sm font-medium text-slate-600 hover:bg-sky-50'
@@ -43,6 +44,9 @@ export function Header() {
         </nav>
 
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+          {roles.includes('STREAMER') && <a href="/campaigns/activity"
+            aria-current={window.location.pathname === '/campaigns/activity' ? 'page' : undefined}
+            className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Campaign activity</a>}
           {advertiser && <a href="/campaigns/manage" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">My campaigns</a>}
           {advertiser && <a href="/creatives" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Creatives</a>}
           <a href="/bookings" className="rounded-lg px-3 py-2 text-slate-700 hover:bg-sky-50">Bookings</a>

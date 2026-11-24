@@ -1,3 +1,4 @@
+import { CampaignActivity } from './CampaignActivity'
 import { CampaignDetails } from './CampaignDetails'
 import { CampaignsPage } from './CampaignsPage'
 import { CreativesPage } from './CreativesPage'
@@ -24,6 +25,7 @@ createRoot(document.getElementById('root')!).render(
     {streamerId && <StreamerDetails id={streamerId} />}
     {path === '/campaigns' && <StreamerCatalog campaigns />}
     {campaignId && <CampaignDetails id={campaignId} />}
+    {path === '/campaigns/activity' && <CampaignActivity />}
     {path === '/campaigns/manage' && <CampaignsPage />}
     {(path === '/bookings' || bookingId) && <BookingsPage id={bookingId} />}
     {path === '/creatives' && <CreativesPage />}

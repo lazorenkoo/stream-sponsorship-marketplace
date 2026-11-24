@@ -86,6 +86,8 @@ export function CampaignInbox({ campaignId, published, direction, onClose }: {
             : <p className="break-words text-sm">Channel {entry.channelId}</p>}
           <p className="text-sm text-slate-600">{labels[entry.status]} · {new Date(entry.createdAt).toLocaleDateString('en')}</p>
         </div>
+        {published && entry.status === 'ACCEPTED' && entry.channelName && <a className={button + ' bg-sky-700 text-white'}
+          href={'/streamers/' + entry.channelId + '?campaign=' + encodeURIComponent(campaignId)}>Make campaign offer</a>}
         {invitations && entry.status === 'PENDING' && <button type="button" className={button} disabled={!!busy || loading}
           onClick={() => void decide(entry, 'WITHDRAW')}>{busy === entry.id ? 'Withdrawing…' : 'Withdraw invitation'}</button>}
         {!invitations && published && entry.status === 'PENDING' && <div className="flex flex-wrap gap-2">

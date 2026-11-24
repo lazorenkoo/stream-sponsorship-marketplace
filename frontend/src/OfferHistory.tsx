@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Rectangle } from './StreamAreaPicker'
 
-type Revision = {
+export type Revision = {
   revision: number
   proposedByRole: string
   createdAt: string

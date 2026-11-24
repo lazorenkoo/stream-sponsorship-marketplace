@@ -1,9 +1,14 @@
+import { BookingAgreement } from './BookingAgreement'
 import { useEffect, useState, type FormEvent } from 'react'
 import { postJson } from './offerApi'
 
 type Booking = {
   id: string
+  offerId: string
+  revision: number
   channelId: string
+  channelName: string
+  placementTitle: string
   status: 'BOOKED' | 'CANCELLED'
   version: number
   window: {
@@ -24,10 +29,12 @@ export function BookingsPage({ id }: { id?: string }) {
   const [next, setNext] = useState<string | null>(null)
   const [status, setStatus] = useState('loading')
   const [refresh, setRefresh] = useState(0)
+  const [filter, setFilter] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
     const query = new URLSearchParams({ limit: '20' })
+    if (filter) query.set('status', filter)
     if (cursor) query.set('after', cursor)
     const path = id ? '/api/bookings/' + id : '/api/bookings?' + query
 
@@ -49,35 +56,60 @@ export function BookingsPage({ id }: { id?: string }) {
 
     load().catch(() => { if (!controller.signal.aborted) setStatus('error') })
     return () => controller.abort()
-  }, [cursor, id, refresh])
+  }, [cursor, id, refresh, filter])
+
+  function reload() {
+    setStatus('loading')
+    setBookings([])
+    setCursor(null)
+    setNext(null)
+    setRefresh(value => value + 1)
+  }
 
   return (
     <main className="mx-auto max-w-4xl space-y-4 px-4 py-8 text-slate-900">
       {id && <a className="text-sm font-medium text-sky-800 hover:underline" href="/bookings">← All bookings</a>}
-      <h1 className="text-2xl font-semibold">{id ? 'Booking details' : 'Bookings'}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">{id ? 'Booking details' : 'Bookings'}</h1>
+        {!id && status !== 'guest' && <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm font-medium">Status
+            <select value={filter} className="rounded-lg border border-slate-300 bg-white px-3 py-2"
+              onChange={event => { setFilter(event.target.value); reload() }}>
+              <option value="">All bookings</option>
+              <option value="BOOKED">Booked</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </label>
+          <button type="button" className={button} disabled={status === 'loading'} onClick={reload}>Refresh</button>
+        </div>}
+      </div>
       {status === 'loading' && <p role="status">Loading bookings…</p>}
       {status === 'guest' && <p><a className="text-sky-800 underline" href="/login">Log in</a> to view your bookings.</p>}
       {status === 'missing' && <p>This booking is unavailable.</p>}
       {status === 'error' && <p role="alert">Could not load bookings. <button type="button" className="underline"
-        onClick={() => { setStatus('loading'); setRefresh(value => value + 1) }}>Try again</button></p>}
-      {status === 'ready' && bookings.length === 0 && <p>No bookings yet.</p>}
+        onClick={reload}>Try again</button></p>}
+      {status === 'ready' && bookings.length === 0 && <p>{filter ? 'No bookings match this status.' : 'No bookings yet.'}</p>}
       <ul className="space-y-3">
         {bookings.map(booking => <li key={booking.id} className="rounded-xl border border-sky-100 bg-white p-4">
           <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
             <div className="space-y-2">
-              <p className="font-semibold">{booking.status === 'CANCELLED' ? 'Cancelled' : 'Booked'}</p>
+              <h2 className="break-words font-semibold">{booking.placementTitle}</h2>
+              <a href={'/streamers/' + booking.channelId} className="inline-block break-words text-sm font-medium text-sky-800 underline">
+                {booking.channelName}
+              </a>
+              <p className="text-sm font-medium">{booking.status === 'CANCELLED' ? 'Cancelled' : 'Booked'}</p>
               <p className="text-sm text-slate-700">
                 {formatDate.format(new Date(booking.window.startsAt))} – {formatDate.format(new Date(booking.window.endsAt))}
               </p>
-              {id
-                ? <a className="text-sm text-sky-800 underline" href={'/streamers/' + booking.channelId}>View channel</a>
-                : <a className="text-sm font-medium text-sky-800 underline" href={'/bookings/' + booking.id}>View booking</a>}
+              {!id && <a className="inline-block text-sm font-medium text-sky-800 underline"
+                href={'/bookings/' + booking.id}>View booking</a>}
             </div>
             <svg viewBox="0 0 10000 10000" preserveAspectRatio="none" role="img" aria-label="Reserved ad area"
               className="aspect-video w-full rounded-lg bg-slate-100">
               <rect {...booking.window.rectangle} fill="#7dd3fc" stroke="#0369a1" strokeWidth="45" />
             </svg>
           </div>
+          {id && <BookingAgreement key={booking.offerId + ':' + booking.revision} offerId={booking.offerId} revision={booking.revision} />}
           {id && <BookingCancellation booking={booking} onCancelled={saved => setBookings([saved])} />}
         </li>)}
       </ul>
@@ -93,6 +125,7 @@ function BookingCancellation({ booking, onCancelled }: { booking: Booking; onCan
   const [error, setError] = useState('')
   const [details, setDetails] = useState<Cancellation | null>(null)
   const [detailsError, setDetailsError] = useState(false)
+  const [detailsRetry, setDetailsRetry] = useState(0)
   const path = '/api/bookings/' + booking.id
 
   useEffect(() => {
@@ -106,7 +139,7 @@ function BookingCancellation({ booking, onCancelled }: { booking: Booking; onCan
       })
       .catch(() => { if (!controller.signal.aborted) setDetailsError(true) })
     return () => controller.abort()
-  }, [booking.status, path])
+  }, [booking.status, path, detailsRetry])
 
   async function cancel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -128,7 +161,10 @@ function BookingCancellation({ booking, onCancelled }: { booking: Booking; onCan
       {details ? <>
         <p>Cancelled by {details.actorRole.toLowerCase()} · {formatDate.format(new Date(details.cancelledAt))}</p>
         <p className="break-words text-slate-700">{details.reason}</p>
-      </> : <p role={detailsError ? 'alert' : 'status'}>{detailsError ? 'Could not load the cancellation reason.' : 'Loading cancellation details…'}</p>}
+      </> : detailsError
+        ? <p role="alert">Could not load the cancellation reason. <button type="button" className="text-sky-800 underline"
+          onClick={() => { setDetailsError(false); setDetailsRetry(value => value + 1) }}>Try again</button></p>
+        : <p role="status">Loading cancellation details…</p>}
     </div>
   )
   if (Date.parse(booking.window.startsAt) <= Date.now()) return null

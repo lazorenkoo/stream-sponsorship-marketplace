@@ -24,8 +24,8 @@ public class AdOfferService {
     public OfferView create(String email, CreateOfferRequest request) {
         UUID actor = actor(email);
         if (!users.findRoles(actor).contains("ADVERTISER")) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-        UUID id = offers.createDraft(UUID.randomUUID(), actor, request.placementId(), request.terms(), clock.instant())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Placement or creative is unavailable"));
+        UUID id = offers.createDraft(UUID.randomUUID(), actor, request.placementId(), request.terms(), clock.instant(), request.campaignId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Placement, campaign or creative is unavailable"));
         offers.recordEvent(id, actor);
         return offers.findForParty(id, actor).orElseThrow();
     }
@@ -69,9 +69,17 @@ public class AdOfferService {
     }
 
     public List<OfferView> list(String email, UUID after, int limit) {
+        return list(email, after, limit, null);
+    }
+
+    public List<OfferView> list(String email, UUID after, int limit, UUID campaignId) {
+        return list(email, after, limit, campaignId, null);
+    }
+
+    public List<OfferView> list(String email, UUID after, int limit, UUID campaignId, OfferStatus status) {
         UUID actor = actor(email);
         if (limit < 1 || limit > 100) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid offer limit");
-        return offers.listForParty(actor, after, limit);
+        return offers.listForParty(actor, after, limit, campaignId, status);
     }
 
     public List<OfferRevisionView> revisions(String email, UUID id, Long before, int limit) {
