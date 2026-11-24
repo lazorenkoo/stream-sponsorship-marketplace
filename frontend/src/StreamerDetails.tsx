@@ -4,6 +4,7 @@ import type { Rectangle } from './StreamAreaPicker'
 import { StreamerPhoto, type Streamer } from './StreamerCatalog'
 
 export type Placement = {
+  channelId: string
   id: string
   title: string
   position: string
