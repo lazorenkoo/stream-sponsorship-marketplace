@@ -208,7 +208,7 @@ public class AdOfferRepository {
     }
 
     public Optional<OfferView> findForParty(UUID id, UUID actor) {
-        return queryForParty(id, actor, null, 1, null).stream().findFirst();
+        return queryForParty(id, actor, null, 1, null, null).stream().findFirst();
     }
 
     public java.util.List<OfferView> listForParty(UUID actor, UUID after, int limit) {
@@ -216,26 +216,36 @@ public class AdOfferRepository {
     }
 
     public java.util.List<OfferView> listForParty(UUID actor, UUID after, int limit, UUID campaignId) {
-        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Offer limit must be between 1 and 100");
-        return queryForParty(null, actor, after, limit, campaignId);
+        return listForParty(actor, after, limit, campaignId, null);
     }
 
-    private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit, UUID campaignId) {
+    public java.util.List<OfferView> listForParty(UUID actor, UUID after, int limit, UUID campaignId, OfferStatus status) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Offer limit must be between 1 and 100");
+        return queryForParty(null, actor, after, limit, campaignId, status);
+    }
+
+    private java.util.List<OfferView> queryForParty(UUID id, UUID actor, UUID after, int limit, UUID campaignId, OfferStatus status) {
         return database.fetch("""
-                SELECT o.id, o.placement_id, o.campaign_id, o.status, o.version, o.current_revision,
+                SELECT o.id, o.placement_id, o.campaign_id, p.channel_id, c.display_name AS channel_name,
+                    p.title AS placement_title, b.id AS booking_id, o.status, o.version, o.current_revision,
                     o.created_at AS offer_created_at, o.updated_at, r.proposed_by <> ? AS recipient, o.advertiser_id = ? AS advertiser, r.*
                 FROM ad_offers o JOIN ad_offer_revisions r ON r.offer_id = o.id AND r.revision = o.current_revision
+                JOIN ad_placements p ON p.id = o.placement_id
+                JOIN connected_channels c ON c.id = p.channel_id
+                LEFT JOIN ad_bookings b ON b.offer_id = o.id
                 WHERE (o.advertiser_id = ? OR (o.streamer_id = ? AND o.sent_at IS NOT NULL))
                   AND (CAST(? AS uuid) IS NULL OR o.id = ?)
                   AND (CAST(? AS uuid) IS NULL OR o.id > ?)
                   AND (CAST(? AS uuid) IS NULL OR o.campaign_id = ?)
+                  AND (CAST(? AS varchar) IS NULL OR o.status = ?)
                 ORDER BY o.id LIMIT ?
-                """, actor, actor, actor, actor, id, id, after, after, campaignId, campaignId, limit).map(row -> {
+                """, actor, actor, actor, actor, id, id, after, after, campaignId, campaignId, status == null ? null : status.name(), status == null ? null : status.name(), limit).map(row -> {
             return new OfferView(row.get("id", UUID.class), row.get("placement_id", UUID.class),
                     OfferStatus.valueOf(row.get("status", String.class)), row.get("version", Long.class),
                     row.get("current_revision", Long.class), terms(row), row.get("offer_created_at", OffsetDateTime.class).toInstant(),
                     row.get("updated_at", OffsetDateTime.class).toInstant(), row.get("recipient", Boolean.class),
-                    row.get("advertiser", Boolean.class), row.get("campaign_id", UUID.class));
+                    row.get("advertiser", Boolean.class), row.get("campaign_id", UUID.class),
+                    row.get("channel_id", UUID.class), row.get("channel_name", String.class), row.get("placement_title", String.class), row.get("booking_id", UUID.class));
         });
     }
 

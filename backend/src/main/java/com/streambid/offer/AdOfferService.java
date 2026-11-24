@@ -73,9 +73,13 @@ public class AdOfferService {
     }
 
     public List<OfferView> list(String email, UUID after, int limit, UUID campaignId) {
+        return list(email, after, limit, campaignId, null);
+    }
+
+    public List<OfferView> list(String email, UUID after, int limit, UUID campaignId, OfferStatus status) {
         UUID actor = actor(email);
         if (limit < 1 || limit > 100) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid offer limit");
-        return offers.listForParty(actor, after, limit, campaignId);
+        return offers.listForParty(actor, after, limit, campaignId, status);
     }
 
     public List<OfferRevisionView> revisions(String email, UUID id, Long before, int limit) {

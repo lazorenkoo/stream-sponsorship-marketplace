@@ -62,7 +62,8 @@ public class AdOfferController {
 
     @GetMapping("/api/offers")
     public ResponseEntity<List<OfferView>> list(Principal principal, @RequestParam(required = false) UUID after,
-            @RequestParam(defaultValue = "20") int limit, @RequestParam(required = false) UUID campaignId) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.list(principal.getName(), after, limit, campaignId));
+            @RequestParam(defaultValue = "20") int limit, @RequestParam(required = false) UUID campaignId,
+            @RequestParam(required = false) OfferStatus status) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(offers.list(principal.getName(), after, limit, campaignId, status));
     }
 }

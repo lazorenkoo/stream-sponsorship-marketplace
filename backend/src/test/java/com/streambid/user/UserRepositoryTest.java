@@ -195,7 +195,10 @@ class UserRepositoryTest {
                 .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":0}")).andExpect(status().isConflict());
 
         mvc.perform(get(location).with(user("offer-advertiser@example.com"))).andExpect(status().isOk())
-                .andExpect(jsonPath("$.advertiser").value(true)).andExpect(jsonPath("$.recipient").value(false));
+                .andExpect(jsonPath("$.advertiser").value(true)).andExpect(jsonPath("$.recipient").value(false))
+                .andExpect(jsonPath("$.channelId").value(channel.toString()))
+                .andExpect(jsonPath("$.channelName").value("Offer streamer"))
+                .andExpect(jsonPath("$.placementTitle").value("Banner"));
         mvc.perform(get(location).with(user("offer-streamer@example.com"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.advertiser").value(false)).andExpect(jsonPath("$.recipient").value(true));
         mvc.perform(post(location + "/close").with(user("offer-streamer@example.com")).with(csrf())
@@ -313,6 +316,16 @@ class UserRepositoryTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
         mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("campaignId", UUID.randomUUID().toString()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com"))
+                .param("campaignId", campaign.toString()).param("status", "DRAFT"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com"))
+                .param("campaignId", campaign.toString()).param("status", "ACCEPTED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/offers").with(user("offer-streamer@example.com")).param("status", "DRAFT"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/offers").with(user("offer-advertiser@example.com")).param("status", "INVALID"))
+                .andExpect(status().isBadRequest());
         creativeDatabase.execute("UPDATE campaigns SET status = 'ARCHIVED' WHERE id = ?", campaign);
         mvc.perform(post("/api/offers").with(user("offer-advertiser@example.com")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content(linkedBody)).andExpect(status().isConflict());

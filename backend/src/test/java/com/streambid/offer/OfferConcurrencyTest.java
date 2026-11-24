@@ -113,9 +113,18 @@ class OfferConcurrencyTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated()).andReturn();
         String location = http.getResponse().getHeader("Location");
         UUID booking = UUID.fromString(location.substring(location.lastIndexOf('/') + 1));
+        mvc.perform(get("/api/offers/" + bookable.id()).with(user("race-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.bookingId").value(booking.toString()));
+        mvc.perform(get("/api/offers/" + bookable.id()).with(user("race-streamer@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.bookingId").value(booking.toString()));
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(location)
                 .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("race-advertiser@example.com")))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+        mvc.perform(get(location).with(user("race-streamer@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.channelName").value("Race channel"))
+                .andExpect(jsonPath("$.placementTitle").value("Banner"));
+        mvc.perform(get("/api/bookings").with(user("race-advertiser@example.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.bookings[0].channelName").value("Race channel"));
         assertThat(bookings.findForParty(booking, UUID.randomUUID())).isEmpty();
         assertThatThrownBy(() -> database.execute("UPDATE ad_bookings SET rectangle_width = 3000 WHERE id = ?", booking))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
@@ -144,6 +153,7 @@ class OfferConcurrencyTest {
                 .contentType("application/json").content("{\"expectedVersion\":1}")).andExpect(status().isConflict());
 
         assertThat(service.find("race-advertiser@example.com", bookable.id()).status()).isEqualTo(OfferStatus.ACCEPTED);
+        assertThat(service.find("race-advertiser@example.com", bookable.id()).bookingId()).isEqualTo(booking);
         assertThat(database.fetchSingle("SELECT rectangle_width FROM ad_bookings WHERE id = ?", booking)
                 .get("rectangle_width", Integer.class)).isEqualTo(2000);
         assertThat(bookings.accept(bookable.id(), streamer, 1, Instant.now())).isEmpty();
@@ -246,6 +256,7 @@ class OfferConcurrencyTest {
         mvc.perform(post(cancel).with(user("race-streamer@example.com")).with(csrf())
                 .contentType("application/json").content(cancellation)).andExpect(status().isConflict());
         assertThat(service.find("race-advertiser@example.com", bookable.id()).status()).isEqualTo(OfferStatus.ACCEPTED);
+        assertThat(service.find("race-advertiser@example.com", bookable.id()).bookingId()).isEqualTo(booking);
         assertThat(database.fetchSingle("SELECT reason FROM ad_booking_cancellations WHERE booking_id = ?", booking)
                 .get("reason", String.class)).isEqualTo("Plans changed");
         mvc.perform(get(calendar).with(user("booking-outsider@example.com")).param("from", from).param("to", to))

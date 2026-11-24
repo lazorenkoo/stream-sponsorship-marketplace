@@ -7,6 +7,8 @@ type Booking = {
   offerId: string
   revision: number
   channelId: string
+  channelName: string
+  placementTitle: string
   status: 'BOOKED' | 'CANCELLED'
   version: number
   window: {
@@ -91,13 +93,16 @@ export function BookingsPage({ id }: { id?: string }) {
         {bookings.map(booking => <li key={booking.id} className="rounded-xl border border-sky-100 bg-white p-4">
           <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
             <div className="space-y-2">
-              <p className="font-semibold">{booking.status === 'CANCELLED' ? 'Cancelled' : 'Booked'}</p>
+              <h2 className="break-words font-semibold">{booking.placementTitle}</h2>
+              <a href={'/streamers/' + booking.channelId} className="inline-block break-words text-sm font-medium text-sky-800 underline">
+                {booking.channelName}
+              </a>
+              <p className="text-sm font-medium">{booking.status === 'CANCELLED' ? 'Cancelled' : 'Booked'}</p>
               <p className="text-sm text-slate-700">
                 {formatDate.format(new Date(booking.window.startsAt))} – {formatDate.format(new Date(booking.window.endsAt))}
               </p>
-              {id
-                ? <a className="text-sm text-sky-800 underline" href={'/streamers/' + booking.channelId}>View channel</a>
-                : <a className="text-sm font-medium text-sky-800 underline" href={'/bookings/' + booking.id}>View booking</a>}
+              {!id && <a className="inline-block text-sm font-medium text-sky-800 underline"
+                href={'/bookings/' + booking.id}>View booking</a>}
             </div>
             <svg viewBox="0 0 10000 10000" preserveAspectRatio="none" role="img" aria-label="Reserved ad area"
               className="aspect-video w-full rounded-lg bg-slate-100">

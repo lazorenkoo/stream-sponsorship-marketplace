@@ -118,7 +118,10 @@ public class AdBookingRepository {
 
     public Optional<BookingView> findForParty(UUID id, UUID actor) {
         return database.fetchOptional("""
-                SELECT b.* FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id
+                SELECT b.*, ch.display_name AS channel_name, p.title AS placement_title
+                FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id
+                JOIN ad_placements p ON p.id = b.placement_id
+                JOIN connected_channels ch ON ch.id = b.channel_id
                 WHERE b.id = ? AND (o.advertiser_id = ? OR o.streamer_id = ?)
                 """, id, actor, actor).map(this::map);
     }
@@ -126,7 +129,10 @@ public class AdBookingRepository {
     public java.util.List<BookingView> listForParty(UUID actor, UUID after, BookingStatus status, int limit) {
         if (limit < 1 || limit > 101) throw new IllegalArgumentException("Invalid booking page limit");
         return database.fetch("""
-                SELECT b.* FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id
+                SELECT b.*, ch.display_name AS channel_name, p.title AS placement_title
+                FROM ad_bookings b JOIN ad_offers o ON o.id = b.offer_id
+                JOIN ad_placements p ON p.id = b.placement_id
+                JOIN connected_channels ch ON ch.id = b.channel_id
                 WHERE (o.advertiser_id = ? OR o.streamer_id = ?)
                   AND (CAST(? AS uuid) IS NULL OR b.id > ?)
                   AND (CAST(? AS varchar) IS NULL OR b.status = ?) ORDER BY b.id LIMIT ?
@@ -140,7 +146,8 @@ public class AdBookingRepository {
                 new BookingWindow(row.get("starts_at", OffsetDateTime.class).toInstant(), row.get("ends_at", OffsetDateTime.class).toInstant(),
                         new com.streambid.offer.OfferRectangle(row.get("rectangle_x", Integer.class), row.get("rectangle_y", Integer.class),
                                 row.get("rectangle_width", Integer.class), row.get("rectangle_height", Integer.class))),
-                row.get("status", String.class), row.get("version", Long.class));
+                row.get("status", String.class), row.get("version", Long.class),
+                row.get("channel_name", String.class), row.get("placement_title", String.class));
     }
 
     private OffsetDateTime time(Instant value) {
